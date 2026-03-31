@@ -124,6 +124,61 @@ describe("MemoryContextBuilder", () => {
 		expect(result).toContain("success");
 	});
 
+	test("filters stale low-signal episodes from prompt context", async () => {
+		const memory = createMockMemorySystem({
+			episodes: Promise.resolve([
+				{
+					id: "stale-ep",
+					type: "task" as const,
+					summary: "One-off stale note",
+					detail: "No longer important",
+					parent_id: null,
+					session_id: "s1",
+					user_id: "u1",
+					tools_used: [],
+					files_touched: [],
+					outcome: "success" as const,
+					outcome_detail: "",
+					lessons: [],
+					started_at: new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString(),
+					ended_at: new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString(),
+					duration_seconds: 300,
+					importance: 0.2,
+					access_count: 0,
+					last_accessed_at: new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString(),
+					decay_rate: 1.0,
+				},
+				{
+					id: "durable-ep",
+					type: "task" as const,
+					summary: "Repeated deployment pattern",
+					detail: "Still referenced often",
+					parent_id: null,
+					session_id: "s2",
+					user_id: "u1",
+					tools_used: ["Bash"],
+					files_touched: [],
+					outcome: "success" as const,
+					outcome_detail: "",
+					lessons: [],
+					started_at: new Date(Date.now() - 45 * 24 * 3600 * 1000).toISOString(),
+					ended_at: new Date(Date.now() - 45 * 24 * 3600 * 1000).toISOString(),
+					duration_seconds: 300,
+					importance: 0.8,
+					access_count: 4,
+					last_accessed_at: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+					decay_rate: 1.0,
+				},
+			]),
+		});
+
+		const builder = new MemoryContextBuilder(memory, TEST_CONFIG);
+		const result = await builder.build("deployment");
+
+		expect(result).toContain("Repeated deployment pattern");
+		expect(result).not.toContain("One-off stale note");
+	});
+
 	test("formats procedure section correctly", async () => {
 		const memory = createMockMemorySystem({
 			procedure: Promise.resolve({

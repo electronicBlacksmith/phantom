@@ -17,6 +17,8 @@ Session transcripts stored as embeddings. Each episode contains:
 
 Search: "What happened last time I worked on the auth service?"
 
+Episode ranking is not raw vector score alone. Retrieval blends semantic match with importance, reinforcement from repeated access, and decay over time so durable memories stay available while stale one-off memories fade.
+
 ### Tier 2: Semantic Memory
 
 Accumulated facts with contradiction detection and temporal validity:
@@ -50,7 +52,8 @@ Before each agent invocation, the context builder:
 3. Searches semantic memory (top 20 facts)
 4. Searches procedural memory (top 5 procedures)
 5. Budgets results to fit within the token limit (default: 50,000 tokens)
-6. Formats results into the memory section of the system prompt
+6. Filters out stale, low-signal episodic memories before prompt injection
+7. Formats results into the memory section of the system prompt
 
 ## Consolidation
 

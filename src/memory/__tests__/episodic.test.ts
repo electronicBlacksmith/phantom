@@ -234,4 +234,66 @@ describe("EpisodicStore", () => {
 		expect(episodes[0].id).toBe("new-ep");
 		expect(episodes[1].id).toBe("old-ep");
 	});
+
+	test("recall() metadata strategy favors reinforced memories", async () => {
+		const vec = make768dVector();
+		const now = Date.now();
+
+		globalThis.fetch = mock((url: string | Request) => {
+			const urlStr = typeof url === "string" ? url : url.url;
+
+			if (urlStr.includes("/api/embed")) {
+				return Promise.resolve(new Response(JSON.stringify({ embeddings: [vec] }), { status: 200 }));
+			}
+
+			if (urlStr.includes("/points/query")) {
+				return Promise.resolve(
+					new Response(
+						JSON.stringify({
+							result: {
+								points: [
+									{
+										id: "stale-ep",
+										score: 0.82,
+										payload: {
+											type: "task",
+											summary: "Stale one-off episode",
+											importance: 0.3,
+											access_count: 0,
+											last_accessed_at: new Date(now - 45 * 24 * 3600 * 1000).toISOString(),
+											started_at: now - 45 * 24 * 3600 * 1000,
+										},
+									},
+									{
+										id: "durable-ep",
+										score: 0.7,
+										payload: {
+											type: "task",
+											summary: "Frequently reused deployment memory",
+											importance: 0.8,
+											access_count: 6,
+											last_accessed_at: new Date(now - 2 * 24 * 3600 * 1000).toISOString(),
+											started_at: now - 45 * 24 * 3600 * 1000,
+										},
+									},
+								],
+							},
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					),
+				);
+			}
+
+			return Promise.resolve(new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
+		}) as unknown as typeof fetch;
+
+		const qdrant = new QdrantClient(TEST_CONFIG);
+		const embedder = new EmbeddingClient(TEST_CONFIG);
+		const store = new EpisodicStore(qdrant, embedder, TEST_CONFIG);
+
+		const episodes = await store.recall("deployment", { strategy: "metadata" });
+
+		expect(episodes[0].id).toBe("durable-ep");
+		expect(episodes[1].id).toBe("stale-ep");
+	});
 });

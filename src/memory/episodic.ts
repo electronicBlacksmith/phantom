@@ -1,6 +1,7 @@
 import type { MemoryConfig } from "../config/types.ts";
 import { type EmbeddingClient, textToSparseVector } from "./embeddings.ts";
 import type { QdrantClient } from "./qdrant-client.ts";
+import { calculateEpisodeRecallScore } from "./ranking.ts";
 import type { Episode, QdrantSearchResult, RecallOptions } from "./types.ts";
 
 const COLLECTION_SCHEMA = {
@@ -128,6 +129,7 @@ export class EpisodicStore {
 		for (const id of ids) {
 			try {
 				await this.qdrant.updatePayload(this.collectionName, id, {
+					access_count: { $inc: 1 },
 					last_accessed_at: new Date().toISOString(),
 				});
 			} catch {
@@ -165,34 +167,23 @@ export class EpisodicStore {
 		return { must };
 	}
 
-	private applyStrategy(results: QdrantSearchResult[], strategy: string): QdrantSearchResult[] {
-		const now = Date.now();
-
+	private applyStrategy(results: QdrantSearchResult[], strategy: RecallOptions["strategy"]): QdrantSearchResult[] {
 		return results
 			.map((r) => {
-				const startedAt = (r.payload.started_at as number) ?? 0;
-				const importance = (r.payload.importance as number) ?? 0.5;
-				const hoursSince = (now - startedAt) / (1000 * 60 * 60);
-				const recencyScore = Math.exp(-0.01 * hoursSince);
-
-				let finalScore: number;
-				switch (strategy) {
-					case "similarity":
-						finalScore = r.score * 0.7 + importance * 0.2 + recencyScore * 0.1;
-						break;
-					case "temporal":
-						finalScore = recencyScore * 0.7 + r.score * 0.2 + importance * 0.1;
-						break;
-					case "metadata":
-						finalScore = r.score * 0.5 + recencyScore * 0.3 + importance * 0.2;
-						break;
-					default:
-						// recency-biased (default)
-						finalScore = r.score * 0.4 + recencyScore * 0.4 + importance * 0.2;
-						break;
-				}
-
-				return { ...r, score: finalScore };
+				return {
+					...r,
+					score: calculateEpisodeRecallScore(
+						r.score,
+						{
+							importance: (r.payload.importance as number) ?? 0.5,
+							accessCount: (r.payload.access_count as number) ?? 0,
+							startedAt: (r.payload.started_at as number) ?? 0,
+							lastAccessedAt: (r.payload.last_accessed_at as string | undefined) ?? undefined,
+							decayRate: (r.payload.decay_rate as number) ?? 1,
+						},
+						strategy,
+					),
+				};
 			})
 			.sort((a, b) => b.score - a.score);
 	}

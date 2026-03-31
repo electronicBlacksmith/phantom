@@ -1,4 +1,5 @@
 import type { MemoryConfig } from "../config/types.ts";
+import { shouldIncludeEpisodeInContext } from "./ranking.ts";
 import type { MemorySystem } from "./system.ts";
 import type { Episode, Procedure, SemanticFact } from "./types.ts";
 
@@ -44,10 +45,13 @@ export class MemoryContextBuilder {
 
 		// Recent memories provide episode context
 		if (episodes.length > 0 && tokenBudget > 500) {
-			const episodeSection = this.formatEpisodes(episodes, tokenBudget);
+			const durableEpisodes = episodes.filter(shouldIncludeEpisodeInContext);
+			const episodeSection = this.formatEpisodes(durableEpisodes, tokenBudget);
 			const episodeTokens = this.estimateTokens(episodeSection);
-			sections.push(episodeSection);
-			tokenBudget -= episodeTokens;
+			if (episodeSection) {
+				sections.push(episodeSection);
+				tokenBudget -= episodeTokens;
+			}
 		}
 
 		// Relevant procedures
@@ -70,6 +74,8 @@ export class MemoryContextBuilder {
 	}
 
 	private formatEpisodes(episodes: Episode[], tokenBudget: number): string {
+		if (episodes.length === 0) return "";
+
 		const header = "## Recent Memories\n";
 		let content = header;
 		const maxChars = tokenBudget * CHARS_PER_TOKEN;
