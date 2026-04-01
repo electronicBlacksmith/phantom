@@ -351,8 +351,15 @@ async function main(): Promise<void> {
 		const sessionStartedAt = new Date().toISOString();
 		const convKey = `${msg.channelId}:${msg.conversationId}`;
 
+		// Append image file paths so the agent can read them via its Read tool
+		let promptText = msg.text;
+		if (msg.attachments && msg.attachments.length > 0) {
+			const paths = msg.attachments.map((a) => a.path).join(", ");
+			promptText += `\n\n[Attached images: ${paths}]`;
+		}
+
 		const existing = conversationMessages.get(convKey) ?? { user: [], assistant: [] };
-		existing.user.push(msg.text);
+		existing.user.push(promptText);
 		conversationMessages.set(convKey, existing);
 
 		const isSlack = msg.channelId === "slack" && slackChannel && msg.metadata;
@@ -408,26 +415,31 @@ async function main(): Promise<void> {
 			telegramChannel.startTyping(telegramChatId);
 		}
 
-		const response = await runtime.handleMessage(msg.channelId, msg.conversationId, msg.text, (event: RuntimeEvent) => {
-			switch (event.type) {
-				case "init":
-					console.log(`\n[phantom] Session: ${event.sessionId}`);
-					break;
-				case "thinking":
-					statusReactions?.setThinking();
-					break;
-				case "tool_use":
-					statusReactions?.setTool(event.tool);
-					if (progressStream) {
-						const summary = formatToolActivity(event.tool, event.input);
-						progressStream.addToolActivity(event.tool, summary);
-					}
-					break;
-				case "error":
-					statusReactions?.setError();
-					break;
-			}
-		});
+		const response = await runtime.handleMessage(
+			msg.channelId,
+			msg.conversationId,
+			promptText,
+			(event: RuntimeEvent) => {
+				switch (event.type) {
+					case "init":
+						console.log(`\n[phantom] Session: ${event.sessionId}`);
+						break;
+					case "thinking":
+						statusReactions?.setThinking();
+						break;
+					case "tool_use":
+						statusReactions?.setTool(event.tool);
+						if (progressStream) {
+							const summary = formatToolActivity(event.tool, event.input);
+							progressStream.addToolActivity(event.tool, summary);
+						}
+						break;
+					case "error":
+						statusReactions?.setError();
+						break;
+				}
+			},
+		);
 
 		// Track assistant messages
 		if (response.text) {

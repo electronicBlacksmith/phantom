@@ -1,3 +1,10 @@
+export type InboundAttachment = {
+	type: "image";
+	path: string;
+	filename: string;
+	mimetype: string;
+};
+
 export type InboundMessage = {
 	id: string;
 	channelId: string;
@@ -8,6 +15,7 @@ export type InboundMessage = {
 	text: string;
 	timestamp: Date;
 	metadata?: Record<string, unknown>;
+	attachments?: InboundAttachment[];
 };
 
 export type OutboundMessage = {

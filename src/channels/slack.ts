@@ -1,10 +1,32 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { App, type LogLevel } from "@slack/bolt";
 import type { SlackBlock } from "./feedback.ts";
 import { buildFeedbackBlocks } from "./feedback.ts";
 import { registerSlackActions } from "./slack-actions.ts";
 import { splitMessage, toSlackMarkdown, truncateForSlack } from "./slack-formatter.ts";
-import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SentMessage } from "./types.ts";
+import type {
+	Channel,
+	ChannelCapabilities,
+	InboundAttachment,
+	InboundMessage,
+	OutboundMessage,
+	SentMessage,
+} from "./types.ts";
+
+const UPLOADS_DIR = join(process.cwd(), "data", "uploads");
+const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
+// file_share is the only subtype we process - all others (message_changed, etc.) are noise
+const ALLOWED_SUBTYPES = new Set(["file_share"]);
+
+type SlackFileRecord = {
+	url_private: string;
+	mimetype: string;
+	name: string;
+	size: number;
+};
 
 export type SlackChannelConfig = {
 	botToken: string;
@@ -96,6 +118,7 @@ export class SlackChannel implements Channel {
 		if (this.connectionState === "connected") return;
 		this.connectionState = "connecting";
 
+		mkdirSync(UPLOADS_DIR, { recursive: true });
 		this.registerEventHandlers();
 		registerSlackActions(this.app);
 
@@ -294,8 +317,14 @@ export class SlackChannel implements Channel {
 			}
 
 			const cleanText = this.stripBotMention(event.text);
-			if (!cleanText.trim()) return;
+			const eventRecord = event as unknown as Record<string, unknown>;
+			const files = eventRecord.files as SlackFileRecord[] | undefined;
+			const attachments = files ? await this.downloadSlackFiles(files) : [];
 
+			// Allow through if there's text or files (or both)
+			if (!cleanText.trim() && attachments.length === 0) return;
+
+			const text = cleanText.trim() || "[User sent attached files]";
 			const threadTs = event.thread_ts ?? event.ts;
 			const conversationId = buildConversationId(event.channel, threadTs);
 
@@ -305,7 +334,7 @@ export class SlackChannel implements Channel {
 				conversationId,
 				threadId: threadTs,
 				senderId,
-				text: cleanText.trim(),
+				text,
 				timestamp: new Date(Number.parseFloat(event.ts) * 1000),
 				metadata: {
 					slackChannel: event.channel,
@@ -313,6 +342,7 @@ export class SlackChannel implements Channel {
 					slackMessageTs: event.ts,
 					source: "app_mention",
 				},
+				...(attachments.length > 0 ? { attachments } : {}),
 			};
 
 			try {
@@ -327,7 +357,7 @@ export class SlackChannel implements Channel {
 			if (!this.messageHandler) return;
 
 			const msg = event as unknown as Record<string, unknown>;
-			if (msg.subtype) return;
+			if (msg.subtype && !ALLOWED_SUBTYPES.has(msg.subtype as string)) return;
 			if (msg.bot_id) return;
 
 			const userId = msg.user as string | undefined;
@@ -342,9 +372,14 @@ export class SlackChannel implements Channel {
 				return;
 			}
 
-			const text = (msg.text as string) ?? "";
-			if (!text.trim()) return;
+			const files = msg.files as SlackFileRecord[] | undefined;
+			const attachments = files ? await this.downloadSlackFiles(files) : [];
 
+			const rawText = ((msg.text as string) ?? "").trim();
+			// Allow through if there's text or files (or both)
+			if (!rawText && attachments.length === 0) return;
+
+			const text = rawText || "[User sent attached files]";
 			const channel = msg.channel as string;
 			const ts = msg.ts as string;
 			const threadTs = (msg.thread_ts as string) ?? ts;
@@ -359,7 +394,7 @@ export class SlackChannel implements Channel {
 				conversationId,
 				threadId: threadTs,
 				senderId: userId ?? "unknown",
-				text: text.trim(),
+				text,
 				timestamp: new Date(Number.parseFloat(ts) * 1000),
 				metadata: {
 					slackChannel: channel,
@@ -367,6 +402,7 @@ export class SlackChannel implements Channel {
 					slackMessageTs: ts,
 					source: "dm",
 				},
+				...(attachments.length > 0 ? { attachments } : {}),
 			};
 
 			try {
@@ -397,6 +433,51 @@ export class SlackChannel implements Channel {
 				});
 			}
 		});
+	}
+
+	private async downloadSlackFiles(files: SlackFileRecord[]): Promise<InboundAttachment[]> {
+		const token = (this.app.client as unknown as Record<string, unknown>).token as string | undefined;
+		if (!token) {
+			console.warn("[slack] No bot token available for file downloads");
+			return [];
+		}
+
+		const attachments: InboundAttachment[] = [];
+
+		for (const file of files) {
+			if (!SUPPORTED_IMAGE_TYPES.has(file.mimetype)) continue;
+			if (file.size > MAX_FILE_SIZE_BYTES) {
+				console.warn(`[slack] Skipping file ${file.name}: exceeds ${MAX_FILE_SIZE_BYTES} byte limit`);
+				continue;
+			}
+
+			try {
+				const response = await fetch(file.url_private, {
+					headers: { Authorization: `Bearer ${token}` },
+				});
+				if (!response.ok) {
+					console.warn(`[slack] Failed to download ${file.name}: HTTP ${response.status}`);
+					continue;
+				}
+
+				const buffer = await response.arrayBuffer();
+				const filename = `${Date.now()}-${file.name}`;
+				const filepath = join(UPLOADS_DIR, filename);
+				await Bun.write(filepath, buffer);
+
+				attachments.push({
+					type: "image",
+					path: filepath,
+					filename: file.name,
+					mimetype: file.mimetype,
+				});
+			} catch (err: unknown) {
+				const errMsg = err instanceof Error ? err.message : String(err);
+				console.warn(`[slack] Failed to download file ${file.name}: ${errMsg}`);
+			}
+		}
+
+		return attachments;
 	}
 
 	private stripBotMention(text: string): string {
