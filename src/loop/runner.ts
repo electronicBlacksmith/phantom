@@ -205,10 +205,17 @@ export class LoopRunner {
 				}
 			}
 
-			this.notifier.postTickUpdate(id, nextIteration, frontmatter?.status ?? "in-progress").catch((err: unknown) => {
+			// Await the tick update so its Slack write finishes before the next
+			// tick can start (and potentially finalize). Without this, a stop on
+			// tick N+1 can race: postFinalNotice strips the Stop button, then the
+			// fire-and-forget postTickUpdate from tick N resolves and re-sends the
+			// blocks, making the button reappear on a finalized message.
+			try {
+				await this.notifier.postTickUpdate(id, nextIteration, frontmatter?.status ?? "in-progress");
+			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : String(err);
 				console.warn(`[loop] Failed to post tick update for ${id}: ${msg}`);
-			});
+			}
 
 			this.scheduleTick(id);
 		} finally {

@@ -161,7 +161,9 @@ export class LoopNotifier {
 	async postFinalNotice(loop: Loop, status: LoopStatus): Promise<void> {
 		if (!this.slackChannel || !loop.channelId) return;
 		const emoji = terminalEmoji(status);
-		const text = `${emoji} Loop \`${loop.id.slice(0, 8)}\` finished (${status}) after ${loop.iterationCount} iterations, $${loop.totalCostUsd.toFixed(4)} spent`;
+		const bar = buildProgressBar(loop.iterationCount, loop.maxIterations);
+		const shortId = loop.id.slice(0, 8);
+		const text = `${emoji} Loop \`${shortId}\` · ${bar} ${loop.iterationCount}/${loop.maxIterations} · $${loop.totalCostUsd.toFixed(4)} · ${status}`;
 		// Intentionally no blocks on the terminal edit: this strips the Stop
 		// button since the loop is no longer interruptible.
 		if (loop.statusMessageTs) {
