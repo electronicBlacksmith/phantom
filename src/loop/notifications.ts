@@ -1,5 +1,6 @@
 import type { SlackBlock } from "../channels/feedback.ts";
 import type { SlackChannel } from "../channels/slack.ts";
+import { readStateFile } from "./state-file.ts";
 import type { LoopStore } from "./store.ts";
 import type { Loop, LoopStatus } from "./types.ts";
 
@@ -46,6 +47,55 @@ function truncate(text: string, max: number): string {
 }
 
 /**
+ * Status message blocks: one section for the current text plus a Stop button.
+ * These must be re-sent on every updateMessage call, because Slack's chat.update
+ * replaces the message wholesale and drops any blocks the caller does not
+ * include. Passing this on tick updates is how the Stop button survives across
+ * progress edits. The final notice deliberately omits blocks so the button
+ * disappears on completion.
+ */
+function buildStatusBlocks(text: string, loopId: string): SlackBlock[] {
+	return [
+		{ type: "section", text: { type: "mrkdwn", text } },
+		{
+			type: "actions",
+			block_id: `phantom_loop_actions_${loopId}`,
+			elements: [
+				{
+					type: "button",
+					text: { type: "plain_text", text: "Stop loop", emoji: true },
+					action_id: `phantom:loop_stop:${loopId}`,
+					style: "danger",
+					value: loopId,
+				},
+			],
+		},
+	];
+}
+
+const FRONTMATTER_RE = /^---\s*\n[\s\S]*?\n---\s*\n?/;
+const MAX_SUMMARY_CHARS = 3500;
+
+/**
+ * Extract the human-readable body of the state file for the end-of-loop
+ * summary. Drops the YAML frontmatter (runner plumbing) and truncates at a
+ * safe limit so a runaway state file does not blow out a Slack message.
+ * Returns null if the file is unreadable or effectively empty, which signals
+ * the caller to skip the summary cleanly.
+ */
+function extractStateSummary(stateFilePath: string): string | null {
+	try {
+		const contents = readStateFile(stateFilePath);
+		const body = contents.replace(FRONTMATTER_RE, "").trim();
+		if (!body) return null;
+		if (body.length <= MAX_SUMMARY_CHARS) return body;
+		return `${body.slice(0, MAX_SUMMARY_CHARS)}\n\n…(truncated)`;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Slack feedback for the loop lifecycle: start notice, per-tick progress
  * edit, final notice, and a reaction ladder on the operator's original
  * message (hourglass → cycle → terminal emoji).
@@ -78,25 +128,9 @@ export class LoopNotifier {
 		if (!ts) return;
 		this.store.setStatusMessageTs(loop.id, ts);
 
-		// Attach a stop button so the operator can interrupt without using MCP.
+		// Attach the stop button so the operator can interrupt without using MCP.
 		// Routed via setLoopStopHandler in slack-actions.ts.
-		const blocks: SlackBlock[] = [
-			{ type: "section", text: { type: "mrkdwn", text } },
-			{
-				type: "actions",
-				block_id: `phantom_loop_actions_${loop.id}`,
-				elements: [
-					{
-						type: "button",
-						text: { type: "plain_text", text: "Stop loop", emoji: true },
-						action_id: `phantom:loop_stop:${loop.id}`,
-						style: "danger",
-						value: loop.id,
-					},
-				],
-			},
-		];
-		await this.slackChannel.updateMessage(loop.channelId, ts, text, blocks);
+		await this.slackChannel.updateMessage(loop.channelId, ts, text, buildStatusBlocks(text, loop.id));
 
 		if (loop.triggerMessageTs) {
 			await this.slackChannel.addReaction(loop.channelId, loop.triggerMessageTs, REACTION_START);
@@ -110,7 +144,9 @@ export class LoopNotifier {
 		const bar = buildProgressBar(iteration, loop.maxIterations);
 		const shortId = loop.id.slice(0, 8);
 		const text = `:repeat: Loop \`${shortId}\` · ${bar} ${iteration}/${loop.maxIterations} · $${loop.totalCostUsd.toFixed(2)}/$${loop.maxCostUsd.toFixed(2)} · ${status}`;
-		await this.slackChannel.updateMessage(loop.channelId, loop.statusMessageTs, text);
+		// Re-send the blocks on every edit, otherwise Slack strips the Stop
+		// button (chat.update replaces the entire message, including blocks).
+		await this.slackChannel.updateMessage(loop.channelId, loop.statusMessageTs, text, buildStatusBlocks(text, loop.id));
 
 		// On the first tick, swap hourglass → cycling arrows. Restart-safe by
 		// construction: iteration is sourced from the call site, so on resume
@@ -126,10 +162,27 @@ export class LoopNotifier {
 		if (!this.slackChannel || !loop.channelId) return;
 		const emoji = terminalEmoji(status);
 		const text = `${emoji} Loop \`${loop.id.slice(0, 8)}\` finished (${status}) after ${loop.iterationCount} iterations, $${loop.totalCostUsd.toFixed(4)} spent`;
+		// Intentionally no blocks on the terminal edit: this strips the Stop
+		// button since the loop is no longer interruptible.
 		if (loop.statusMessageTs) {
 			await this.slackChannel.updateMessage(loop.channelId, loop.statusMessageTs, text);
 		} else {
 			await this.slackChannel.postToChannel(loop.channelId, text);
+		}
+
+		// Post the state.md body as a threaded reply so the operator can see
+		// what the agent actually did across the run. The state file is the
+		// agent's working memory, curated every tick, so it already contains
+		// a progress log the operator wants to read. This costs no extra
+		// agent calls; we simply surface content the agent already wrote.
+		const summary = extractStateSummary(loop.stateFile);
+		if (summary) {
+			const summaryThreadTs = loop.conversationId ?? loop.statusMessageTs ?? undefined;
+			await this.slackChannel.postToChannel(
+				loop.channelId,
+				`:notebook: *Loop \`${loop.id.slice(0, 8)}\` final state:*\n\`\`\`\n${summary}\n\`\`\``,
+				summaryThreadTs,
+			);
 		}
 
 		if (loop.triggerMessageTs) {

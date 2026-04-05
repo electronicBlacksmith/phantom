@@ -1,5 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { SlackChannel } from "../../channels/slack.ts";
 import { runMigrations } from "../../db/migrate.ts";
 import { LoopNotifier, buildProgressBar, terminalEmoji } from "../notifications.ts";
@@ -218,6 +221,26 @@ describe("LoopNotifier", () => {
 			expect(text).toContain("in-progress");
 		});
 
+		test("re-sends blocks on every tick edit so the Stop button persists", async () => {
+			// Regression test: Slack's chat.update replaces the entire message
+			// and drops blocks the caller does not include. Without passing
+			// blocks on tick updates, the Stop button would disappear after
+			// the first tick edit. Verify the button survives.
+			insertWithStatusTs();
+			const slack = makeSlack();
+			const notifier = new LoopNotifier(asSlack(slack), store);
+			await notifier.postTickUpdate("abcdef0123456789", 2, "in-progress");
+
+			expect(slack.updateMessage).toHaveBeenCalledTimes(1);
+			const updateArgs = slack.updateMessage.mock.calls[0];
+			const blocks = updateArgs[3] as Array<Record<string, unknown>> | undefined;
+			expect(blocks).toBeDefined();
+			const actionsBlock = blocks?.find((b) => b.type === "actions");
+			expect(actionsBlock).toBeDefined();
+			const elements = (actionsBlock as { elements: Array<Record<string, unknown>> }).elements;
+			expect(elements[0].action_id).toBe("phantom:loop_stop:abcdef0123456789");
+		});
+
 		test("swaps hourglass → cycle on the first tick", async () => {
 			insertWithStatusTs();
 			const slack = makeSlack();
@@ -305,6 +328,108 @@ describe("LoopNotifier", () => {
 			);
 			expect(slack.addReaction).not.toHaveBeenCalled();
 			expect(slack.removeReaction).not.toHaveBeenCalled();
+		});
+
+		describe("state summary thread reply", () => {
+			let workDir: string;
+
+			beforeEach(() => {
+				workDir = mkdtempSync(join(tmpdir(), "loop-notifier-summary-"));
+			});
+
+			afterEach(() => {
+				rmSync(workDir, { recursive: true, force: true });
+			});
+
+			function writeStateFile(body: string): string {
+				const stateFile = join(workDir, "state.md");
+				mkdirSync(workDir, { recursive: true });
+				writeFileSync(stateFile, `---\nloop_id: abc\nstatus: done\niteration: 3\n---\n\n${body}\n`, "utf-8");
+				return stateFile;
+			}
+
+			test("posts the state.md body as a threaded reply on completion", async () => {
+				const stateFile = writeStateFile("# Progress\n- Tick 1: Hello!\n- Tick 2: Hello!\n- Tick 3: Hello!");
+				const slack = makeSlack();
+				const notifier = new LoopNotifier(asSlack(slack), store);
+				await notifier.postFinalNotice(makeLoop({ stateFile, statusMessageTs: "1700000000.100100" }), "done");
+
+				// The status message edit is one call; the summary is a second
+				// postToChannel call in the same thread.
+				expect(slack.postToChannel).toHaveBeenCalledTimes(1);
+				const [channel, text, threadTs] = slack.postToChannel.mock.calls[0];
+				expect(channel).toBe("C100");
+				expect(text).toContain("Tick 1: Hello!");
+				expect(text).toContain("Tick 3: Hello!");
+				expect(text).toContain("final state");
+				// Frontmatter must be stripped
+				expect(text).not.toContain("loop_id: abc");
+				expect(text).not.toContain("iteration: 3");
+				// Posted in the same thread as the original turn
+				expect(threadTs).toBe("1700000000.000100");
+			});
+
+			test("falls back to status_message_ts when conversationId is null", async () => {
+				const stateFile = writeStateFile("# Progress\n- done");
+				const slack = makeSlack();
+				const notifier = new LoopNotifier(asSlack(slack), store);
+				await notifier.postFinalNotice(
+					makeLoop({
+						stateFile,
+						statusMessageTs: "1700000000.100100",
+						conversationId: null,
+					}),
+					"done",
+				);
+
+				expect(slack.postToChannel).toHaveBeenCalledTimes(1);
+				const threadTs = slack.postToChannel.mock.calls[0][2];
+				expect(threadTs).toBe("1700000000.100100");
+			});
+
+			test("silently skips summary when state file does not exist", async () => {
+				const slack = makeSlack();
+				const notifier = new LoopNotifier(asSlack(slack), store);
+				await notifier.postFinalNotice(
+					makeLoop({ stateFile: "/nonexistent/path/state.md", statusMessageTs: "1700000000.100100" }),
+					"done",
+				);
+				// The terminal reaction path still runs, but no summary post.
+				expect(slack.postToChannel).not.toHaveBeenCalled();
+			});
+
+			test("silently skips summary when body is empty", async () => {
+				const stateFile = writeStateFile("");
+				const slack = makeSlack();
+				const notifier = new LoopNotifier(asSlack(slack), store);
+				await notifier.postFinalNotice(makeLoop({ stateFile, statusMessageTs: "1700000000.100100" }), "done");
+				expect(slack.postToChannel).not.toHaveBeenCalled();
+			});
+
+			test("truncates very long summaries", async () => {
+				// 5000 chars of body, well over the 3500 cap
+				const body = "x".repeat(5000);
+				const stateFile = writeStateFile(body);
+				const slack = makeSlack();
+				const notifier = new LoopNotifier(asSlack(slack), store);
+				await notifier.postFinalNotice(makeLoop({ stateFile, statusMessageTs: "1700000000.100100" }), "done");
+				const text = slack.postToChannel.mock.calls[0][1] as string;
+				expect(text).toContain("…(truncated)");
+				// Total posted text must be bounded by 3500 chars of body + small
+				// amount of surrounding formatting, so under ~3700.
+				expect(text.length).toBeLessThan(3800);
+			});
+
+			test("summary also fires for stopped/failed/budget_exceeded outcomes", async () => {
+				const stateFile = writeStateFile("# Progress\n- partial work");
+				for (const status of ["stopped", "failed", "budget_exceeded"] as const) {
+					const slack = makeSlack();
+					const notifier = new LoopNotifier(asSlack(slack), store);
+					await notifier.postFinalNotice(makeLoop({ stateFile, statusMessageTs: "1700000000.100100", status }), status);
+					expect(slack.postToChannel).toHaveBeenCalledTimes(1);
+					expect(slack.postToChannel.mock.calls[0][1]).toContain("partial work");
+				}
+			});
 		});
 	});
 });
