@@ -301,8 +301,6 @@ Add this to your `claude_desktop_config.json` (Settings → Developer → Edit C
 
 Restart Claude Desktop after saving. The first connection may take a moment while `mcp-remote` is downloaded.
 
-Restart Claude Desktop after saving. The first connection may take a moment while `mcp-remote` is downloaded.
-
 ### Verify
 
 Once connected, Claude can query your Phantom's memory, ask it questions, check status, and use any dynamic tools the agent has built.
