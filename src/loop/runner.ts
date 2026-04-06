@@ -111,8 +111,9 @@ export class LoopRunner {
 			triggerMessageTs: input.triggerMessageTs ?? null,
 		});
 
-		this.notifier.postStartNotice(loop).catch((e: unknown) => {
-			console.warn(`[loop] Failed to post start notice for ${id}: ${e instanceof Error ? e.message : e}`);
+		this.notifier.postStartNotice(loop).catch((err: unknown) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[loop] Failed to post start notice for ${id}: ${msg}`);
 		});
 
 		// Cache memory context once for the entire loop (goal is constant)
@@ -214,7 +215,11 @@ export class LoopRunner {
 				await this.runCritique(id, loop, updatedContents, nextIteration);
 			}
 
-			// Await tick update so its Slack write finishes before the next tick
+			// Await the tick update so its Slack write finishes before the next
+			// tick can start (and potentially finalize). Without this, a stop on
+			// tick N+1 can race: postFinalNotice strips the Stop button, then the
+			// fire-and-forget postTickUpdate from tick N resolves and re-sends the
+			// blocks, making the button reappear on a finalized message.
 			try {
 				await this.notifier.postTickUpdate(id, nextIteration, frontmatter?.status ?? "in-progress");
 			} catch (err: unknown) {
@@ -252,14 +257,16 @@ export class LoopRunner {
 		this.pendingCritique.delete(id);
 		const loop = this.store.finalize(id, status, error);
 		if (!loop) return;
-		this.notifier.postFinalNotice(loop, status).catch((e: unknown) => {
-			console.warn(`[loop] Failed to post final notice for ${id}: ${e instanceof Error ? e.message : e}`);
+		this.notifier.postFinalNotice(loop, status).catch((err: unknown) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[loop] Failed to post final notice for ${id}: ${msg}`);
 		});
 
 		// Post-loop evolution and consolidation (fire-and-forget, never affects loop status)
 		if (this.postLoopDeps && transcript) {
-			runPostLoopPipeline(this.postLoopDeps, synthesizeSessionData(loop, status, transcript)).catch((e: unknown) => {
-				console.warn(`[loop] Post-loop evolution failed for ${id}: ${e instanceof Error ? e.message : e}`);
+			runPostLoopPipeline(this.postLoopDeps, synthesizeSessionData(loop, status, transcript)).catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.warn(`[loop] Post-loop evolution failed for ${id}: ${msg}`);
 			});
 		}
 	}
