@@ -19,7 +19,7 @@ describe("/trigger endpoint auth", () => {
 	let server: ReturnType<typeof Bun.serve>;
 	let baseUrl: string;
 
-	beforeAll(() => {
+	beforeAll(async () => {
 		// Back up the existing mcp.yaml so we can restore it after tests
 		if (existsSync(mcpConfigPath)) {
 			originalMcpYaml = readFileSync(mcpConfigPath, "utf-8");
@@ -38,11 +38,8 @@ describe("/trigger endpoint auth", () => {
 		mkdirSync("config", { recursive: true });
 		writeFileSync(mcpConfigPath, YAML.stringify(mcpConfig), "utf-8");
 
-		// Start server with a random port
-		server = startServer({ name: "test", port: 0, role: "base" } as never, Date.now());
-		baseUrl = `http://localhost:${server.port}`;
-
-		// Wire trigger deps with a mock runtime
+		// Wire trigger deps before starting the server so the /trigger
+		// handler is ready on the first request.
 		setTriggerDeps({
 			runtime: {
 				handleMessage: async () => ({
@@ -52,6 +49,15 @@ describe("/trigger endpoint auth", () => {
 				}),
 			} as never,
 		});
+
+		// Start server after deps are wired. Use server.url (Bun guarantees
+		// it is populated once serve() returns) instead of manually building
+		// the URL from server.port, which can race in CI environments.
+		server = startServer({ name: "test", port: 0, role: "base" } as never, Date.now());
+		baseUrl = server.url.origin;
+
+		// Ensure the server is accepting connections before tests run.
+		await fetch(`${baseUrl}/health`);
 	});
 
 	afterAll(() => {
