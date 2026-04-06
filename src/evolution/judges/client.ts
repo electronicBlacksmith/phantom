@@ -10,6 +10,19 @@ import {
 	type VotingStrategy,
 } from "./types.ts";
 
+/** Thrown when the API call succeeds but structured output parsing fails. Carries token usage so cost can still be tracked. */
+export class JudgeParseError extends Error {
+	constructor(
+		message: string,
+		public readonly inputTokens: number,
+		public readonly outputTokens: number,
+		public readonly costUsd: number,
+	) {
+		super(message);
+		this.name = "JudgeParseError";
+	}
+}
+
 let _client: Anthropic | null = null;
 
 function getClient(): Anthropic {
@@ -58,13 +71,18 @@ export async function callJudge<T>(options: {
 	});
 
 	const parsed = message.parsed_output;
-	if (!parsed) {
-		throw new Error(`Judge returned no structured output (stop_reason: ${message.stop_reason})`);
-	}
-
 	const inputTokens = message.usage.input_tokens;
 	const outputTokens = message.usage.output_tokens;
 	const costUsd = estimateCost(options.model, inputTokens, outputTokens);
+
+	if (!parsed) {
+		throw new JudgeParseError(
+			`Judge returned no structured output (stop_reason: ${message.stop_reason})`,
+			inputTokens,
+			outputTokens,
+			costUsd,
+		);
+	}
 
 	// Extract verdict and confidence from the parsed data if present
 	const data = parsed as Record<string, unknown>;

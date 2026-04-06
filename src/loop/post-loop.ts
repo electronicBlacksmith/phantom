@@ -12,10 +12,10 @@ export type LoopTranscript = {
 };
 
 export type PostLoopDeps = {
-	evolution: EvolutionEngine;
-	memory: MemorySystem;
+	evolution?: EvolutionEngine;
+	memory?: MemorySystem;
 	/** Callback to update runtime's evolved config after evolution applies changes. */
-	onEvolvedConfigUpdate: (config: ReturnType<EvolutionEngine["getConfig"]>) => void;
+	onEvolvedConfigUpdate?: (config: ReturnType<EvolutionEngine["getConfig"]>) => void;
 };
 
 function loopStatusToOutcome(status: LoopStatus): SessionData["outcome"] {
@@ -27,6 +27,39 @@ function loopStatusToOutcome(status: LoopStatus): SessionData["outcome"] {
 		default:
 			return "failure";
 	}
+}
+
+const MAX_ROLLING_SUMMARIES = 10;
+
+export function recordTranscript(
+	transcripts: Map<string, LoopTranscript>,
+	loopId: string,
+	iteration: number,
+	prompt: string,
+	response: string,
+	stateStatus: string | undefined,
+): void {
+	let transcript = transcripts.get(loopId);
+	if (!transcript) {
+		transcript = {
+			firstPrompt: prompt,
+			firstResponse: response,
+			summaries: [],
+			lastPrompt: prompt,
+			lastResponse: response,
+		};
+		transcripts.set(loopId, transcript);
+	} else {
+		transcript.lastPrompt = prompt;
+		transcript.lastResponse = response;
+	}
+	const summary = `Tick ${iteration}: ${stateStatus ?? "in-progress"}`;
+	transcript.summaries.push(summary);
+	if (transcript.summaries.length > MAX_ROLLING_SUMMARIES) transcript.summaries.shift();
+}
+
+export function clamp(value: number, min: number, max: number): number {
+	return Math.min(Math.max(value, min), max);
 }
 
 export function synthesizeSessionData(loop: Loop, status: LoopStatus, transcript: LoopTranscript): SessionData {
@@ -70,24 +103,25 @@ export async function runPostLoopPipeline(deps: PostLoopDeps, sessionData: Sessi
 		"../memory/consolidation.ts"
 	);
 
-	const summary = sessionDataToSummary(sessionData);
-
-	// Evolution pipeline (same pattern as src/index.ts:560-589)
-	try {
-		const result = await evolution.afterSession(summary);
-		if (result.changes_applied.length > 0) {
-			onEvolvedConfigUpdate(evolution.getConfig());
+	// Evolution pipeline - runs independently of memory state
+	if (evolution) {
+		const summary = sessionDataToSummary(sessionData);
+		try {
+			const result = await evolution.afterSession(summary);
+			if (result.changes_applied.length > 0 && onEvolvedConfigUpdate) {
+				onEvolvedConfigUpdate(evolution.getConfig());
+			}
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[loop] Post-loop evolution failed: ${msg}`);
 		}
-	} catch (err: unknown) {
-		const msg = err instanceof Error ? err.message : String(err);
-		console.warn(`[loop] Post-loop evolution failed: ${msg}`);
 	}
 
-	// Memory consolidation - respects cost cap (matches interactive session pattern)
-	if (!memory.isReady()) return;
+	// Memory consolidation - runs independently of evolution state
+	if (!memory?.isReady()) return;
 	try {
-		const useLLM = evolution.usesLLMJudges() && evolution.isWithinCostCap();
-		if (useLLM) {
+		const useLLM = evolution?.usesLLMJudges() && evolution?.isWithinCostCap();
+		if (useLLM && evolution) {
 			const evolvedConfig = evolution.getConfig();
 			const existingFacts = `${evolvedConfig.userProfile}\n${evolvedConfig.domainKnowledge}`;
 			const { result, judgeCost } = await consolidateSessionWithLLM(memory, sessionData, existingFacts);
