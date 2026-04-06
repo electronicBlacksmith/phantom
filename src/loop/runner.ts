@@ -7,7 +7,14 @@ import { buildSafeEnv } from "../mcp/dynamic-handlers.ts";
 import type { MemoryContextBuilder } from "../memory/context-builder.ts";
 import { runCritiqueJudge } from "./critique.ts";
 import { LoopNotifier } from "./notifications.ts";
-import { type LoopTranscript, type PostLoopDeps, runPostLoopPipeline, synthesizeSessionData } from "./post-loop.ts";
+import {
+	type LoopTranscript,
+	type PostLoopDeps,
+	clamp,
+	recordTranscript,
+	runPostLoopPipeline,
+	synthesizeSessionData,
+} from "./post-loop.ts";
 import { buildTickPrompt } from "./prompt.ts";
 import { initStateFile, parseFrontmatter, readStateFile } from "./state-file.ts";
 import { LoopStore } from "./store.ts";
@@ -186,13 +193,7 @@ export class LoopRunner {
 			const frontmatter = parseFrontmatter(updatedContents);
 
 			// Track bounded transcript for post-loop evolution
-			this.recordTranscript(id, nextIteration, prompt, response.text, frontmatter?.status);
-
-			// Mid-loop critique checkpoint (Sonnet reviewing Opus mid-flight).
-			// Awaited so the critique is available before the next tick runs.
-			if (loop.checkpointInterval && loop.checkpointInterval > 0 && nextIteration % loop.checkpointInterval === 0) {
-				await this.runCritique(id, loop, updatedContents, nextIteration);
-			}
+			recordTranscript(this.transcripts, id, nextIteration, prompt, response.text, frontmatter?.status);
 
 			if (frontmatter?.status === "done") {
 				this.finalize(id, "done", null);
@@ -205,6 +206,12 @@ export class LoopRunner {
 					this.finalize(id, "done", null);
 					return;
 				}
+			}
+
+			// Mid-loop critique checkpoint (Sonnet reviewing Opus mid-flight).
+			// Runs after terminal checks so we don't waste a judge call on the final tick.
+			if (loop.checkpointInterval && loop.checkpointInterval > 0 && nextIteration % loop.checkpointInterval === 0) {
+				await this.runCritique(id, loop, updatedContents, nextIteration);
 			}
 
 			// Await tick update so its Slack write finishes before the next tick
@@ -271,32 +278,6 @@ export class LoopRunner {
 		}
 	}
 
-	private recordTranscript(
-		loopId: string,
-		iteration: number,
-		prompt: string,
-		response: string,
-		stateStatus: string | undefined,
-	): void {
-		let transcript = this.transcripts.get(loopId);
-		if (!transcript) {
-			transcript = {
-				firstPrompt: prompt,
-				firstResponse: response,
-				summaries: [],
-				lastPrompt: prompt,
-				lastResponse: response,
-			};
-			this.transcripts.set(loopId, transcript);
-		} else {
-			transcript.lastPrompt = prompt;
-			transcript.lastResponse = response;
-		}
-		const summary = `Tick ${iteration}: ${stateStatus ?? "in-progress"}`;
-		transcript.summaries.push(summary);
-		if (transcript.summaries.length > 10) transcript.summaries.shift();
-	}
-
 	private cacheMemoryContext(loopId: string, goal: string): void {
 		if (!this.memoryContextBuilder) return;
 		this.memoryContextBuilder
@@ -308,8 +289,4 @@ export class LoopRunner {
 				console.warn(`[loop] Memory context failed for ${loopId}: ${e instanceof Error ? e.message : e}`);
 			});
 	}
-}
-
-function clamp(value: number, min: number, max: number): number {
-	return Math.min(Math.max(value, min), max);
 }
