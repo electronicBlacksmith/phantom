@@ -10,6 +10,7 @@ export type Loop = {
 	successCommand: string | null;
 	maxIterations: number;
 	maxCostUsd: number;
+	checkpointInterval: number | null;
 	status: LoopStatus;
 	iterationCount: number;
 	totalCostUsd: number;
@@ -32,6 +33,7 @@ export type LoopRow = {
 	success_command: string | null;
 	max_iterations: number;
 	max_cost_usd: number;
+	checkpoint_interval: number | null;
 	status: string;
 	iteration_count: number;
 	total_cost_usd: number;
@@ -57,6 +59,7 @@ export type LoopStartInput = {
 	workspace?: string;
 	maxIterations?: number;
 	maxCostUsd?: number;
+	checkpointInterval?: number;
 	successCommand?: string;
 	channelId?: string;
 	conversationId?: string;
@@ -74,6 +77,7 @@ export const LoopStartInputSchema = z.object({
 	workspace: z.string().optional(),
 	max_iterations: z.number().int().positive().max(LOOP_MAX_ITERATIONS_CEILING).optional(),
 	max_cost_usd: z.number().positive().max(LOOP_MAX_COST_CEILING_USD).optional(),
+	checkpoint_interval: z.number().int().min(0).max(LOOP_MAX_ITERATIONS_CEILING).optional(),
 	success_command: z.string().optional(),
 	channel_id: z.string().optional(),
 	conversation_id: z.string().optional(),
@@ -93,6 +97,7 @@ export function rowToLoop(row: LoopRow): Loop {
 		successCommand: row.success_command,
 		maxIterations: row.max_iterations,
 		maxCostUsd: row.max_cost_usd,
+		checkpointInterval: row.checkpoint_interval,
 		status: row.status as LoopStatus,
 		iterationCount: row.iteration_count,
 		totalCostUsd: row.total_cost_usd,

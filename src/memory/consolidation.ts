@@ -70,7 +70,7 @@ export async function consolidateSessionWithLLM(
 	}
 }
 
-function sessionDataToSummary(data: SessionData): SessionSummary {
+export function sessionDataToSummary(data: SessionData): SessionSummary {
 	return {
 		session_id: data.sessionId,
 		session_key: data.sessionKey,

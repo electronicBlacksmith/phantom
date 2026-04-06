@@ -116,8 +116,9 @@ async function main(): Promise<void> {
 		runtime.setRoleTemplate(activeRole);
 	}
 
+	let contextBuilder: MemoryContextBuilder | undefined;
 	if (memory.isReady()) {
-		const contextBuilder = new MemoryContextBuilder(memory, memoryConfig);
+		contextBuilder = new MemoryContextBuilder(memory, memoryConfig);
 		runtime.setMemoryContextBuilder(contextBuilder);
 	}
 
@@ -160,7 +161,15 @@ async function main(): Promise<void> {
 
 	let mcpServer: PhantomMcpServer | null = null;
 	let scheduler: Scheduler | null = null;
-	const loopRunner = new LoopRunner({ db, runtime });
+	const postLoopDeps =
+		evolution && memory.isReady()
+			? {
+					evolution,
+					memory,
+					onEvolvedConfigUpdate: (config: ReturnType<EvolutionEngine["getConfig"]>) => runtime.setEvolvedConfig(config),
+				}
+			: undefined;
+	const loopRunner = new LoopRunner({ db, runtime, memoryContextBuilder: contextBuilder, postLoopDeps });
 	try {
 		mcpServer = new PhantomMcpServer({
 			config,
