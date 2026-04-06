@@ -55,6 +55,7 @@ ACTIONS:
     workspace (defaults to data/loops/<id>/),
     max_iterations (default 20, hard ceiling 200),
     max_cost_usd (default 5, hard ceiling 50),
+    checkpoint_interval (run a Sonnet critique every N ticks, 0 or omitted = off),
     success_command (shell command run after each tick; exit 0 = goal
       achieved. Runs under bash -c with a 5 minute timeout in a sanitized env
       containing only PATH, HOME, LANG, TERM, loop_id, and workspace),
@@ -72,6 +73,13 @@ regression". Each iteration is fresh - all context must live in the state file.`
 			workspace: z.string().optional(),
 			max_iterations: z.number().int().positive().max(200).optional(),
 			max_cost_usd: z.number().positive().max(50).optional(),
+			checkpoint_interval: z
+				.number()
+				.int()
+				.min(0)
+				.max(200)
+				.optional()
+				.describe("Run a Sonnet review every N ticks. 0 or omitted = no critique."),
 			success_command: z.string().optional(),
 			channel_id: z.string().optional(),
 			conversation_id: z.string().optional(),
@@ -93,6 +101,7 @@ regression". Each iteration is fresh - all context must live in the state file.`
 							workspace: input.workspace,
 							maxIterations: input.max_iterations,
 							maxCostUsd: input.max_cost_usd,
+							checkpointInterval: input.checkpoint_interval,
 							successCommand: input.success_command,
 							channelId: input.channel_id ?? ctx?.slackChannelId,
 							conversationId: input.conversation_id ?? ctx?.slackThreadTs,
