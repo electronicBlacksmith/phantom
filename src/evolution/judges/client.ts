@@ -27,7 +27,8 @@ let _client: Anthropic | null = null;
 
 function getClient(): Anthropic {
 	if (!_client) {
-		_client = new Anthropic();
+		const authToken = process.env.ANTHROPIC_AUTH_TOKEN || process.env.CLAUDE_CODE_OAUTH_TOKEN || undefined;
+		_client = authToken && !process.env.ANTHROPIC_API_KEY ? new Anthropic({ authToken }) : new Anthropic();
 	}
 	return _client;
 }
@@ -38,7 +39,7 @@ export function setClient(client: Anthropic | null): void {
 }
 
 export function isJudgeAvailable(): boolean {
-	return !!process.env.ANTHROPIC_API_KEY;
+	return !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.CLAUDE_CODE_OAUTH_TOKEN);
 }
 
 /**
