@@ -4,7 +4,17 @@ import { join, relative, resolve } from "node:path";
 import type { AgentRuntime } from "../agent/runtime.ts";
 import type { SlackChannel } from "../channels/slack.ts";
 import { buildSafeEnv } from "../mcp/dynamic-handlers.ts";
+import type { MemoryContextBuilder } from "../memory/context-builder.ts";
+import { runCritiqueJudge } from "./critique.ts";
 import { LoopNotifier } from "./notifications.ts";
+import {
+	type LoopTranscript,
+	type PostLoopDeps,
+	clamp,
+	recordTranscript,
+	runPostLoopPipeline,
+	synthesizeSessionData,
+} from "./post-loop.ts";
 import { buildTickPrompt } from "./prompt.ts";
 import { initStateFile, parseFrontmatter, readStateFile } from "./state-file.ts";
 import { LoopStore } from "./store.ts";
@@ -18,11 +28,7 @@ import {
 	type LoopStatus,
 } from "./types.ts";
 
-/**
- * The runner only needs handleMessage from the AgentRuntime - narrowing the
- * dependency keeps the runner honest (SRP) and lets tests pass a minimal mock
- * without `as never` casts. A real AgentRuntime is assignable to this.
- */
+/** Narrowed runtime interface for testability. */
 type LoopRuntime = Pick<AgentRuntime, "handleMessage">;
 
 type RunnerDeps = {
@@ -30,31 +36,15 @@ type RunnerDeps = {
 	runtime: LoopRuntime;
 	slackChannel?: SlackChannel;
 	dataDir?: string;
-	/**
-	 * When true (default), start() and resumeRunning() schedule ticks on the
-	 * event loop automatically. Tests set this to false so they can drive
-	 * ticks deterministically with explicit `await runner.tick(id)` calls.
-	 */
+	memoryContextBuilder?: MemoryContextBuilder;
+	postLoopDeps?: PostLoopDeps;
+	/** Tests set to false to drive ticks deterministically. */
 	autoSchedule?: boolean;
 };
 
 const SUCCESS_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 
-/**
- * LoopRunner owns the lifecycle of ralph loops:
- *   start -> tick (N times) -> finalize
- *
- * Each tick is a fresh SDK session. We achieve that by passing a unique
- * conversation id per iteration to runtime.handleMessage, which keys
- * sessions on `${channelId}:${conversationId}`. No runtime changes needed.
- *
- * State lives in a markdown file. The runner only reads the YAML frontmatter
- * to decide termination - the body is the agent's working memory.
- *
- * Budgets (max_iterations, max_cost_usd) are enforced here, never trusted to
- * the agent. The agent can self-declare done (status: done) to stop early,
- * but cannot extend the loop past its budget.
- */
+/** start -> tick (N times) -> finalize. State file is the agent's memory across ticks. */
 export class LoopRunner {
 	private store: LoopStore;
 	private runtime: LoopRuntime;
@@ -63,6 +53,11 @@ export class LoopRunner {
 	private autoSchedule: boolean;
 	private inFlight = new Set<string>();
 	private notifier: LoopNotifier;
+	private memoryContextBuilder: MemoryContextBuilder | undefined;
+	private postLoopDeps: PostLoopDeps | undefined;
+	private memoryCache = new Map<string, string>();
+	private transcripts = new Map<string, LoopTranscript>();
+	private pendingCritique = new Map<string, string>();
 
 	constructor(deps: RunnerDeps) {
 		this.store = new LoopStore(deps.db);
@@ -71,6 +66,8 @@ export class LoopRunner {
 		this.dataDir = deps.dataDir ?? resolve(process.cwd(), "data");
 		this.autoSchedule = deps.autoSchedule ?? true;
 		this.notifier = new LoopNotifier(this.slackChannel ?? null, this.store);
+		this.memoryContextBuilder = deps.memoryContextBuilder;
+		this.postLoopDeps = deps.postLoopDeps;
 	}
 
 	setSlackChannel(channel: SlackChannel): void {
@@ -78,11 +75,6 @@ export class LoopRunner {
 		this.notifier = new LoopNotifier(channel, this.store);
 	}
 
-	/**
-	 * Reject operator-supplied workspace paths that escape the data dir. The
-	 * agent invokes start() via MCP, and a stray `..` could point the state
-	 * file outside the sandbox. Mirrors the isPathSafe idiom in src/ui/serve.ts.
-	 */
 	private assertWorkspaceInsideDataDir(workspace: string): string {
 		const base = resolve(this.dataDir);
 		const target = resolve(base, workspace);
@@ -113,15 +105,18 @@ export class LoopRunner {
 			successCommand: input.successCommand ?? null,
 			maxIterations,
 			maxCostUsd,
+			checkpointInterval: input.checkpointInterval ?? null,
 			channelId: input.channelId ?? null,
 			conversationId: input.conversationId ?? null,
 			triggerMessageTs: input.triggerMessageTs ?? null,
 		});
 
-		this.notifier.postStartNotice(loop).catch((err: unknown) => {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.warn(`[loop] Failed to post start notice for ${id}: ${msg}`);
+		this.notifier.postStartNotice(loop).catch((e: unknown) => {
+			console.warn(`[loop] Failed to post start notice for ${id}: ${e instanceof Error ? e.message : e}`);
 		});
+
+		// Cache memory context once for the entire loop (goal is constant)
+		this.cacheMemoryContext(id, input.goal);
 
 		this.scheduleTick(id);
 		return loop;
@@ -139,11 +134,11 @@ export class LoopRunner {
 		return this.store.requestStop(id);
 	}
 
-	/** On startup, re-queue any loops still marked running. State file is the source of truth. */
 	resumeRunning(): number {
 		const running = this.store.listByStatus("running");
 		for (const loop of running) {
 			console.log(`[loop] Resuming ${loop.id} (iteration ${loop.iterationCount})`);
+			this.cacheMemoryContext(loop.id, loop.goal);
 			this.scheduleTick(loop.id);
 		}
 		return running.length;
@@ -151,10 +146,9 @@ export class LoopRunner {
 
 	private scheduleTick(id: string): void {
 		if (!this.autoSchedule) return;
-		// setImmediate yields to the event loop so we never recurse on the same stack.
 		setImmediate(() => {
-			this.tick(id).catch((err: unknown) => {
-				const msg = err instanceof Error ? err.message : String(err);
+			this.tick(id).catch((e: unknown) => {
+				const msg = e instanceof Error ? e.message : String(e);
 				console.error(`[loop] Tick ${id} threw: ${msg}`);
 				this.finalize(id, "failed", msg);
 			});
@@ -179,7 +173,13 @@ export class LoopRunner {
 			}
 
 			const stateFileContents = readStateFile(loop.stateFile);
-			const prompt = buildTickPrompt(loop, stateFileContents);
+			const memoryContext = this.memoryCache.get(id);
+			const critique = this.pendingCritique.get(id);
+			if (critique) this.pendingCritique.delete(id);
+			const prompt = buildTickPrompt(loop, stateFileContents, {
+				memoryContext,
+				critique,
+			});
 
 			const conversationId = `${loop.id}:${loop.iterationCount}`;
 			const response = await this.runtime.handleMessage("loop", conversationId, prompt);
@@ -191,6 +191,9 @@ export class LoopRunner {
 			// Re-read state file to learn what the agent wants to do next.
 			const updatedContents = readStateFile(loop.stateFile);
 			const frontmatter = parseFrontmatter(updatedContents);
+
+			// Track bounded transcript for post-loop evolution
+			recordTranscript(this.transcripts, id, nextIteration, prompt, response.text, frontmatter?.status);
 
 			if (frontmatter?.status === "done") {
 				this.finalize(id, "done", null);
@@ -205,11 +208,13 @@ export class LoopRunner {
 				}
 			}
 
-			// Await the tick update so its Slack write finishes before the next
-			// tick can start (and potentially finalize). Without this, a stop on
-			// tick N+1 can race: postFinalNotice strips the Stop button, then the
-			// fire-and-forget postTickUpdate from tick N resolves and re-sends the
-			// blocks, making the button reappear on a finalized message.
+			// Mid-loop critique checkpoint (Sonnet reviewing Opus mid-flight).
+			// Runs after terminal checks so we don't waste a judge call on the final tick.
+			if (loop.checkpointInterval && loop.checkpointInterval > 0 && nextIteration % loop.checkpointInterval === 0) {
+				await this.runCritique(id, loop, updatedContents, nextIteration);
+			}
+
+			// Await tick update so its Slack write finishes before the next tick
 			try {
 				await this.notifier.postTickUpdate(id, nextIteration, frontmatter?.status ?? "in-progress");
 			} catch (err: unknown) {
@@ -241,15 +246,47 @@ export class LoopRunner {
 	}
 
 	private finalize(id: string, status: LoopStatus, error: string | null): void {
+		const transcript = this.transcripts.get(id);
+		this.memoryCache.delete(id);
+		this.transcripts.delete(id);
+		this.pendingCritique.delete(id);
 		const loop = this.store.finalize(id, status, error);
 		if (!loop) return;
-		this.notifier.postFinalNotice(loop, status).catch((err: unknown) => {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.warn(`[loop] Failed to post final notice for ${id}: ${msg}`);
+		this.notifier.postFinalNotice(loop, status).catch((e: unknown) => {
+			console.warn(`[loop] Failed to post final notice for ${id}: ${e instanceof Error ? e.message : e}`);
 		});
-	}
-}
 
-function clamp(value: number, min: number, max: number): number {
-	return Math.min(Math.max(value, min), max);
+		// Post-loop evolution and consolidation (fire-and-forget, never affects loop status)
+		if (this.postLoopDeps && transcript) {
+			runPostLoopPipeline(this.postLoopDeps, synthesizeSessionData(loop, status, transcript)).catch((e: unknown) => {
+				console.warn(`[loop] Post-loop evolution failed for ${id}: ${e instanceof Error ? e.message : e}`);
+			});
+		}
+	}
+
+	private async runCritique(loopId: string, loop: Loop, stateContents: string, iteration: number): Promise<void> {
+		const transcript = this.transcripts.get(loopId);
+		if (!transcript) return;
+		const evo = this.postLoopDeps?.evolution;
+		if (!evo || !evo.usesLLMJudges() || !evo.isWithinCostCap()) return;
+		try {
+			const r = await runCritiqueJudge(loop.goal, stateContents, transcript, iteration, loop.maxIterations);
+			this.pendingCritique.set(loopId, r.assessment);
+			evo.trackExternalJudgeCost(r.cost);
+		} catch (e: unknown) {
+			console.warn(`[loop] Critique failed for ${loopId}: ${e instanceof Error ? e.message : e}`);
+		}
+	}
+
+	private cacheMemoryContext(loopId: string, goal: string): void {
+		if (!this.memoryContextBuilder) return;
+		this.memoryContextBuilder
+			.build(goal)
+			.then((ctx) => {
+				if (ctx) this.memoryCache.set(loopId, ctx);
+			})
+			.catch((e: unknown) => {
+				console.warn(`[loop] Memory context failed for ${loopId}: ${e instanceof Error ? e.message : e}`);
+			});
+	}
 }

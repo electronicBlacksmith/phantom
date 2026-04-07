@@ -126,4 +126,6 @@ export const MIGRATIONS: string[] = [
 	// Appended, never inserted mid-array: existing deployments have already
 	// applied migrations 0–10, so the new column must land at index 11.
 	"ALTER TABLE loops ADD COLUMN trigger_message_ts TEXT",
+
+	"ALTER TABLE loops ADD COLUMN checkpoint_interval INTEGER",
 ];
