@@ -1,12 +1,29 @@
 import type { Loop } from "./types.ts";
 
+export type TickPromptOptions = {
+	memoryContext?: string;
+	critique?: string;
+};
+
 /**
  * Per-tick prompt. Each tick is a fresh SDK session with no prior context
  * (rotating conversation ids in the runner guarantee this), so the prompt
  * must carry everything the agent needs: the goal, the state file contract,
  * the current state file contents, and the workspace path.
  */
-export function buildTickPrompt(loop: Loop, stateFileContents: string): string {
+export function buildTickPrompt(loop: Loop, stateFileContents: string, options?: TickPromptOptions): string {
+	const memorySections: string[] = [];
+
+	if (options?.memoryContext) {
+		memorySections.push(`RECALLED MEMORIES (from previous sessions)\n\n${options.memoryContext}`);
+	}
+
+	if (options?.critique) {
+		memorySections.push(`REVIEWER FEEDBACK (from your last checkpoint)\n\n${options.critique}`);
+	}
+
+	const injected = memorySections.length > 0 ? `\n\n${memorySections.join("\n\n")}\n` : "";
+
 	return `You are running inside a "ralph loop" - a tight iteration primitive where a
 fresh agent session is invoked once per tick. You have no memory from previous
 ticks. All shared memory lives in the state file at:
@@ -45,7 +62,7 @@ is one short paragraph telling the next tick exactly what to do first.
 
 THE GOAL
 
-${loop.goal}
+${loop.goal}${injected}
 
 CURRENT STATE FILE CONTENTS
 
