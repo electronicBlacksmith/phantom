@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createInProcessToolServer } from "./agent/in-process-tools.ts";
 import { AgentRuntime } from "./agent/runtime.ts";
@@ -19,9 +19,11 @@ import { loadChannelsConfig, loadConfig } from "./config/loader.ts";
 import { installShutdownHandlers, onShutdown } from "./core/graceful.ts";
 import {
 	setChannelHealthProvider,
+	setEvolutionInfoProvider,
 	setEvolutionVersionProvider,
 	setMcpServerProvider,
 	setMemoryHealthProvider,
+	setModelInfoProvider,
 	setOnboardingStatusProvider,
 	setPeerHealthProvider,
 	setRoleInfoProvider,
@@ -97,6 +99,7 @@ async function main(): Promise<void> {
 	await memory.initialize();
 
 	setMemoryHealthProvider(() => memory.healthCheck());
+	setModelInfoProvider(() => ({ model: config.model, model_source: config.model_source }));
 
 	let evolution: EvolutionEngine | null = null;
 	try {
@@ -105,6 +108,27 @@ async function main(): Promise<void> {
 		const judgeMode = evolution.usesLLMJudges() ? "LLM judges" : "heuristic";
 		console.log(`[evolution] Engine initialized (v${currentVersion}, ${judgeMode})`);
 		setEvolutionVersionProvider(() => evolution?.getCurrentVersion() ?? 0);
+		setEvolutionInfoProvider(() => {
+			if (!evolution) return { generation: 0, session_count: 0, sessions_since_consolidation: 0, session_log_depth: 0 };
+			const metrics = evolution.getMetrics();
+			const evoConfig = evolution.getEvolutionConfig();
+			let sessionLogDepth = 0;
+			try {
+				const logPath = evoConfig.paths.session_log;
+				if (existsSync(logPath)) {
+					const content = readFileSync(logPath, "utf-8").trim();
+					sessionLogDepth = content.length > 0 ? content.split("\n").length : 0;
+				}
+			} catch {
+				/* non-critical */
+			}
+			return {
+				generation: evolution.getCurrentVersion(),
+				session_count: metrics.session_count,
+				sessions_since_consolidation: metrics.sessions_since_consolidation,
+				session_log_depth: sessionLogDepth,
+			};
+		});
 	} catch (err: unknown) {
 		const msg = err instanceof Error ? err.message : String(err);
 		console.warn(`[evolution] Failed to initialize: ${msg}. Running without self-evolution.`);
@@ -540,10 +564,10 @@ async function main(): Promise<void> {
 						if (judgeCost) {
 							evolution?.trackExternalJudgeCost(judgeCost);
 						}
-						if (result.episodesCreated > 0 || result.factsExtracted > 0) {
+						if (result.episodesCreated > 0 || result.factsExtracted > 0 || result.proceduresDetected > 0) {
 							console.log(
 								`[memory] Consolidated (LLM): ${result.episodesCreated} episodes, ` +
-									`${result.factsExtracted} facts (${result.durationMs}ms)`,
+									`${result.factsExtracted} facts, ${result.proceduresDetected} procedures (${result.durationMs}ms)`,
 							);
 						}
 					})
