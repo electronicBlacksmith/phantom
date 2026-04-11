@@ -1127,15 +1127,15 @@ describe("SlackChannel postToChannel", () => {
 		expect(concatenatedText).toContain("truncated; full content was 6000 characters");
 	});
 
-	test("chunked fallback with no cap never produces a half-open code fence", async () => {
+	test("chunked fallback does not introduce triple-backticks into fence-free text", async () => {
 		mockFilesUploadV2.mockImplementation(() => Promise.reject(new Error("not_allowed")));
 
 		const channel = new SlackChannel(testConfig);
 		await channel.connect();
 
-		// Plain prose, no backticks in the input. If the formatter or
-		// chunker ever introduced an unpaired fence, this test would catch
-		// it. The assertion is the explicit "even number of ``` runs".
+		// Regression guard for the removed outer-fence wrapper. Input is
+		// plain prose with zero backticks; any triple-backticks in the
+		// output would mean this path reintroduced the bug.
 		const body = "paragraph ".repeat(600);
 		await channel.postToChannel("C_CHAN", body, "1234.5678");
 
@@ -1143,8 +1143,29 @@ describe("SlackChannel postToChannel", () => {
 		expect(calls.length).toBeGreaterThan(0);
 		for (const call of calls) {
 			const chunkText = call[0].text as string;
-			const fenceCount = (chunkText.match(/```/g) ?? []).length;
-			expect(fenceCount % 2).toBe(0);
+			expect(chunkText).not.toContain("```");
 		}
+	});
+
+	test("negative cap is treated as no cap (defensive, not a real caller)", async () => {
+		mockFilesUploadV2.mockImplementation(() => Promise.reject(new Error("not_allowed")));
+
+		const channel = new SlackChannel(testConfig);
+		await channel.connect();
+
+		// A negative cap would make text.slice(0, -1) post "all but the
+		// last char" plus a truncation notice, defeating the cap. The code
+		// silently ignores negative / non-finite values.
+		const body = "x".repeat(4000);
+		await channel.postToChannel("C_CHAN", body, "1234.5678", -1);
+
+		const calls = mockPostMessage.mock.calls as unknown as Array<[Record<string, unknown>]>;
+		const concatenatedText = calls.map((c) => c[0].text as string).join("");
+		// No truncation notice — cap was ignored.
+		expect(concatenatedText).not.toContain("truncated; full content was");
+		// Full body was delivered (sum of chunks has length close to 4000;
+		// Slack formatting + chunk boundaries add a handful of whitespace,
+		// so assert lower bound only).
+		expect(concatenatedText.length).toBeGreaterThanOrEqual(4000);
 	});
 });

@@ -270,10 +270,24 @@ export class SlackChannel implements Channel {
 		// Chunked fallback: if the caller supplied a cap, bound the text
 		// here (not earlier) so that we don't spray an unbounded body
 		// across many chat.postMessage calls when upload is unavailable.
+		// Negative/non-finite caps are silently treated as "no cap" to make
+		// this safe for future callers; `text.slice(0, -1)` would otherwise
+		// defeat the cap and post nearly the entire body.
+		//
+		// Note: `splitMessage` is not code-fence aware, so a bounded body
+		// that happens to contain a long fenced block can still produce
+		// half-open fences across chunks. The upload path sidesteps this;
+		// fixing it in the chunker is out of scope for this path.
+		const hasCap =
+			typeof inlineFallbackMaxChars === "number" &&
+			Number.isFinite(inlineFallbackMaxChars) &&
+			inlineFallbackMaxChars >= 0;
 		let fallbackText = text;
-		if (inlineFallbackMaxChars !== undefined && text.length > inlineFallbackMaxChars) {
-			fallbackText = `${text.slice(0, inlineFallbackMaxChars)}\n\n_(truncated; full content was ${text.length} characters)_`;
+		if (hasCap && text.length > (inlineFallbackMaxChars as number)) {
+			fallbackText = `${text.slice(0, inlineFallbackMaxChars as number)}\n\n_(truncated; full content was ${text.length} characters)_`;
 		}
+		// Reuse the already-computed chunks when the cap did not trigger
+		// (fallbackText is still the same object reference as text).
 		const fallbackChunks = fallbackText === text ? chunks : splitMessage(toSlackMarkdown(fallbackText));
 
 		let lastTs: string | null = null;
