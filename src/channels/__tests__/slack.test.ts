@@ -1075,3 +1075,76 @@ describe("SlackChannel outbound file upload", () => {
 		expect(uploadArg.filename).toBe("response.md");
 	});
 });
+
+describe("SlackChannel postToChannel", () => {
+	beforeEach(() => {
+		eventHandlers.clear();
+		actionHandlers.clear();
+		mockStart.mockClear();
+		mockAuthTest.mockClear();
+		mockPostMessage.mockClear();
+		mockFilesUploadV2.mockClear();
+		// Default to success unless a test overrides it. We reset the
+		// implementation every beforeEach because prior tests may have swapped
+		// it to reject, and mockClear does not reset implementation.
+		mockFilesUploadV2.mockImplementation(() => Promise.resolve({ ok: true }));
+	});
+
+	test("upload branch receives the full text untruncated even when cap is set", async () => {
+		const channel = new SlackChannel(testConfig);
+		await channel.connect();
+
+		const body = "x".repeat(6000);
+		await channel.postToChannel("C_CHAN", body, "1234.5678", 3500);
+
+		expect(mockFilesUploadV2).toHaveBeenCalledTimes(1);
+		const uploadCalls = mockFilesUploadV2.mock.calls as unknown as Array<[Record<string, unknown>]>;
+		const content = uploadCalls[0][0].content as string;
+		// The cap must NOT apply to the upload path.
+		expect(content.length).toBeGreaterThanOrEqual(6000);
+		expect(content).not.toContain("…(truncated)");
+		expect(content).not.toContain("(truncated; full content was");
+	});
+
+	test("chunked fallback applies the cap when upload fails", async () => {
+		mockFilesUploadV2.mockImplementation(() => Promise.reject(new Error("not_allowed")));
+
+		const channel = new SlackChannel(testConfig);
+		await channel.connect();
+
+		const body = "x".repeat(6000);
+		await channel.postToChannel("C_CHAN", body, "1234.5678", 3500);
+
+		// Chunked fallback fired.
+		expect(mockPostMessage).toHaveBeenCalled();
+
+		const calls = mockPostMessage.mock.calls as unknown as Array<[Record<string, unknown>]>;
+		const concatenatedText = calls.map((c) => c[0].text as string).join("");
+
+		// Total posted text should be ~3500 + a short truncation notice,
+		// well under the 6000-char original.
+		expect(concatenatedText.length).toBeLessThan(3800);
+		expect(concatenatedText).toContain("truncated; full content was 6000 characters");
+	});
+
+	test("chunked fallback with no cap never produces a half-open code fence", async () => {
+		mockFilesUploadV2.mockImplementation(() => Promise.reject(new Error("not_allowed")));
+
+		const channel = new SlackChannel(testConfig);
+		await channel.connect();
+
+		// Plain prose, no backticks in the input. If the formatter or
+		// chunker ever introduced an unpaired fence, this test would catch
+		// it. The assertion is the explicit "even number of ``` runs".
+		const body = "paragraph ".repeat(600);
+		await channel.postToChannel("C_CHAN", body, "1234.5678");
+
+		const calls = mockPostMessage.mock.calls as unknown as Array<[Record<string, unknown>]>;
+		expect(calls.length).toBeGreaterThan(0);
+		for (const call of calls) {
+			const chunkText = call[0].text as string;
+			const fenceCount = (chunkText.match(/```/g) ?? []).length;
+			expect(fenceCount % 2).toBe(0);
+		}
+	});
+});

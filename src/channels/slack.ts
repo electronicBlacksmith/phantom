@@ -237,12 +237,20 @@ export class SlackChannel implements Channel {
 		return this.connectionState;
 	}
 
-	async postToChannel(channelId: string, text: string, threadTs?: string): Promise<string | null> {
+	async postToChannel(
+		channelId: string,
+		text: string,
+		threadTs?: string,
+		inlineFallbackMaxChars?: number,
+	): Promise<string | null> {
 		const formattedText = toSlackMarkdown(text);
 		const chunks = splitMessage(formattedText);
 
 		if (chunks.length > 1 && threadTs) {
 			const summary = generateSummary(formattedText);
+			// Upload the full, original body verbatim. The cap only applies
+			// to the chunked fallback below, not to the upload path: if the
+			// upload succeeds, the operator gets the complete content.
 			const uploaded = await uploadSlackFile(this.app.client, channelId, threadTs, text, "response.md");
 			if (uploaded) {
 				try {
@@ -259,9 +267,18 @@ export class SlackChannel implements Channel {
 			}
 		}
 
+		// Chunked fallback: if the caller supplied a cap, bound the text
+		// here (not earlier) so that we don't spray an unbounded body
+		// across many chat.postMessage calls when upload is unavailable.
+		let fallbackText = text;
+		if (inlineFallbackMaxChars !== undefined && text.length > inlineFallbackMaxChars) {
+			fallbackText = `${text.slice(0, inlineFallbackMaxChars)}\n\n_(truncated; full content was ${text.length} characters)_`;
+		}
+		const fallbackChunks = fallbackText === text ? chunks : splitMessage(toSlackMarkdown(fallbackText));
+
 		let lastTs: string | null = null;
 
-		for (const chunk of chunks) {
+		for (const chunk of fallbackChunks) {
 			try {
 				const result = await this.app.client.chat.postMessage({
 					channel: channelId,
