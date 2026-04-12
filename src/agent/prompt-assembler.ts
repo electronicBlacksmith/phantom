@@ -267,10 +267,6 @@ function buildSecurity(): string {
 function buildEvolvedSections(evolved: EvolvedConfig): string {
 	const parts: string[] = [];
 
-	if (evolved.constitution.trim()) {
-		parts.push(`# Constitution\n\n${evolved.constitution.trim()}`);
-	}
-
 	if (evolved.persona.trim() && countContentLines(evolved.persona) > 1) {
 		parts.push(`# Communication Style\n\n${evolved.persona.trim()}`);
 	}
