@@ -37,6 +37,9 @@ services:
       - phantom_data:/app/data
       - phantom_public:/app/public
       - phantom_repos:/app/repos
+      # Claude Code credentials (persists `claude login` across restarts so
+      # subscription users do not have to re-authenticate on every upgrade)
+      - phantom_claude:/home/phantom/.claude
       # Docker socket for sibling container creation
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -105,6 +108,7 @@ volumes:
   phantom_data:
   phantom_public:
   phantom_repos:
+  phantom_claude:
   qdrant_data:
   ollama_data:
 

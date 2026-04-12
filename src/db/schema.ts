@@ -97,4 +97,10 @@ export const MIGRATIONS: string[] = [
 		expires_at TEXT NOT NULL,
 		completed_at TEXT
 	)`,
+
+	// Phase 2.5 scheduler hardening: record whether the last delivery attempt
+	// actually made it to Slack. null = never delivered, "delivered" = sent,
+	// "dropped:<reason>" = skipped at the delivery branch, "error:<reason>" =
+	// Slack threw during send. Existing rows keep null on migration.
+	"ALTER TABLE scheduled_jobs ADD COLUMN last_delivery_status TEXT",
 ];

@@ -24,6 +24,7 @@ import {
 	setOnboardingStatusProvider,
 	setPeerHealthProvider,
 	setRoleInfoProvider,
+	setSchedulerHealthProvider,
 	setTriggerDeps,
 	setWebhookHandler,
 	startServer,
@@ -177,6 +178,7 @@ async function main(): Promise<void> {
 
 		// Wire scheduler into the agent (Slack channel set later after channel init)
 		scheduler = new Scheduler({ db, runtime });
+		setSchedulerHealthProvider(() => scheduler?.getHealthSummary() ?? null);
 
 		// Pass factories (not singletons) so each query() gets fresh MCP server instances.
 		// The underlying registries (DynamicToolRegistry, Scheduler) are singletons.
@@ -593,9 +595,13 @@ async function main(): Promise<void> {
 
 	await router.connectAll();
 
-	// Wire Slack into scheduler and /trigger now that channels are connected
-	if (scheduler && slackChannel && channelsConfig?.slack?.owner_user_id) {
-		scheduler.setSlackChannel(slackChannel, channelsConfig.slack.owner_user_id);
+	// Wire Slack into scheduler and /trigger now that channels are connected.
+	// The owner_user_id gate was removed in Phase 2.5 (C3): channel-id and
+	// user-id delivery targets do not need the owner; only target="owner"
+	// does, and the scheduler's delivery path records a loud "dropped" status
+	// in that specific case instead of silently no-oping every job.
+	if (scheduler && slackChannel) {
+		scheduler.setSlackChannel(slackChannel, channelsConfig?.slack?.owner_user_id ?? null);
 	}
 	if (scheduler) {
 		await scheduler.start();

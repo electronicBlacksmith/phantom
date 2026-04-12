@@ -35,7 +35,7 @@ describe("runMigrations", () => {
 		runMigrations(db);
 
 		const migrationCount = db.query("SELECT COUNT(*) as count FROM _migrations").get() as { count: number };
-		expect(migrationCount.count).toBe(9);
+		expect(migrationCount.count).toBe(10);
 	});
 
 	test("tracks applied migration indices", () => {
@@ -47,6 +47,6 @@ describe("runMigrations", () => {
 			.all()
 			.map((r) => (r as { index_num: number }).index_num);
 
-		expect(indices).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+		expect(indices).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 	});
 });

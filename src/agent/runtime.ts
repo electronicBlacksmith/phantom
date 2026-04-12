@@ -70,6 +70,16 @@ export class AgentRuntime {
 		return this.config;
 	}
 
+	/**
+	 * Peek whether a session key is currently executing. The scheduler uses
+	 * this to avoid even calling handleMessage when a prior execution of the
+	 * same job is still in flight (Phase 2.5 C2 braces layer). Direct callers
+	 * outside the scheduler still see the belt layer: an Error-shaped return.
+	 */
+	isSessionBusy(channelId: string, conversationId: string): boolean {
+		return this.activeSessions.has(`${channelId}:${conversationId}`);
+	}
+
 	async handleMessage(
 		channelId: string,
 		conversationId: string,
@@ -80,8 +90,12 @@ export class AgentRuntime {
 		const startTime = Date.now();
 
 		if (this.activeSessions.has(sessionKey)) {
+			// Belt layer for C2: return a loud, parseable Error so direct callers
+			// (router, trigger, secret save) stop treating the bounce as success.
+			// The scheduler adds its own braces layer via isSessionBusy.
+			console.warn(`[runtime] Session busy, bouncing concurrent message: ${sessionKey}`);
 			return {
-				text: "I'm still working on your previous message. Please wait.",
+				text: "Error: session busy (previous execution still running)",
 				sessionId: "",
 				cost: emptyCost(),
 				durationMs: 0,

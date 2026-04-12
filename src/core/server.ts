@@ -5,6 +5,7 @@ import { AuthMiddleware } from "../mcp/auth.ts";
 import { loadMcpConfig } from "../mcp/config.ts";
 import type { PhantomMcpServer } from "../mcp/server.ts";
 import type { MemoryHealth } from "../memory/types.ts";
+import type { SchedulerHealthSummary } from "../scheduler/health.ts";
 import { handleUiRequest } from "../ui/serve.ts";
 
 const VERSION = "0.18.2";
@@ -17,6 +18,7 @@ type RoleInfoProvider = () => { id: string; name: string } | null;
 type OnboardingStatusProvider = () => string;
 type WebhookHandler = (req: Request) => Promise<Response>;
 type PeerHealthProvider = () => Record<string, { healthy: boolean; latencyMs: number; error?: string }>;
+type SchedulerHealthProvider = () => SchedulerHealthSummary | null;
 type TriggerDeps = {
 	runtime: AgentRuntime;
 	slackChannel?: SlackChannel;
@@ -31,6 +33,7 @@ let roleInfoProvider: RoleInfoProvider | null = null;
 let onboardingStatusProvider: OnboardingStatusProvider | null = null;
 let webhookHandler: WebhookHandler | null = null;
 let peerHealthProvider: PeerHealthProvider | null = null;
+let schedulerHealthProvider: SchedulerHealthProvider | null = null;
 let triggerDeps: TriggerDeps | null = null;
 
 export function setMemoryHealthProvider(provider: MemoryHealthProvider): void {
@@ -65,6 +68,10 @@ export function setPeerHealthProvider(provider: PeerHealthProvider): void {
 	peerHealthProvider = provider;
 }
 
+export function setSchedulerHealthProvider(provider: SchedulerHealthProvider): void {
+	schedulerHealthProvider = provider;
+}
+
 export function setTriggerDeps(deps: TriggerDeps): void {
 	triggerDeps = deps;
 }
@@ -97,6 +104,7 @@ export function startServer(config: PhantomConfig, startedAt: number): ReturnTyp
 
 				const onboardingStatus = onboardingStatusProvider ? onboardingStatusProvider() : null;
 				const peers = peerHealthProvider ? peerHealthProvider() : null;
+				const scheduler = schedulerHealthProvider ? schedulerHealthProvider() : null;
 
 				return Response.json({
 					status,
@@ -112,6 +120,7 @@ export function startServer(config: PhantomConfig, startedAt: number): ReturnTyp
 					},
 					...(onboardingStatus ? { onboarding: onboardingStatus } : {}),
 					...(peers && Object.keys(peers).length > 0 ? { peers } : {}),
+					...(scheduler ? { scheduler } : {}),
 				});
 			}
 
