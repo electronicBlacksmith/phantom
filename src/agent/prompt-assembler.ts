@@ -11,6 +11,7 @@ export function assemblePrompt(
 	roleTemplate?: RoleTemplate,
 	onboardingPrompt?: string,
 	dataDir?: string,
+	configDir?: string,
 ): string {
 	const sections: string[] = [];
 
@@ -22,6 +23,13 @@ export function assemblePrompt(
 
 	// 3. Security - what you must never do
 	sections.push(buildSecurity());
+
+	// 3a. Constitution - immutable principles loaded from phantom-config/constitution.md
+	const resolvedConfigDir = configDir ?? join(process.cwd(), "phantom-config");
+	const constitution = buildConstitution(resolvedConfigDir);
+	if (constitution) {
+		sections.push(constitution);
+	}
 
 	// 4. Role-specific prompt section (detailed identity, capabilities, communication)
 	if (roleTemplate) {
@@ -398,4 +406,16 @@ function countContentLines(text: string): number {
 		const trimmed = line.trim();
 		return trimmed !== "" && !trimmed.startsWith("#");
 	}).length;
+}
+
+function buildConstitution(configDir: string): string {
+	const path = join(configDir, "constitution.md");
+	try {
+		if (!existsSync(path)) return "";
+		const content = readFileSync(path, "utf-8").trim();
+		if (!content) return "";
+		return `# Constitution\n\n${content}`;
+	} catch {
+		return "";
+	}
 }

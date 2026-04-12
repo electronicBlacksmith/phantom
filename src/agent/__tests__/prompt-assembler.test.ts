@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { PhantomConfig } from "../../config/types.ts";
 import { assemblePrompt } from "../prompt-assembler.ts";
 
@@ -70,5 +72,46 @@ describe("assemblePrompt Docker awareness", () => {
 		expect(prompt).toContain("Full Bash access");
 		expect(prompt).toContain("phantom_register_tool");
 		expect(prompt).toContain("Security Boundaries");
+	});
+});
+
+describe("assemblePrompt constitution injection", () => {
+	const TEST_CONFIG_DIR = join(import.meta.dir, ".test-prompt-assembler-config");
+
+	beforeEach(() => {
+		mkdirSync(TEST_CONFIG_DIR, { recursive: true });
+	});
+
+	afterEach(() => {
+		rmSync(TEST_CONFIG_DIR, { recursive: true, force: true });
+	});
+
+	test("injects constitution.md as a top-level section after security", () => {
+		writeFileSync(
+			join(TEST_CONFIG_DIR, "constitution.md"),
+			"# Phantom Constitution\n\n1. Honesty: do not lie.\n9. Workflow: follow role workflow rules.\n",
+		);
+
+		const prompt = assemblePrompt(baseConfig, undefined, undefined, undefined, undefined, undefined, TEST_CONFIG_DIR);
+
+		expect(prompt).toContain("# Constitution");
+		expect(prompt).toContain("1. Honesty: do not lie.");
+		expect(prompt).toContain("9. Workflow: follow role workflow rules.");
+
+		const securityIdx = prompt.indexOf("Security Boundaries");
+		const constitutionIdx = prompt.indexOf("# Constitution");
+		expect(securityIdx).toBeGreaterThan(-1);
+		expect(constitutionIdx).toBeGreaterThan(securityIdx);
+	});
+
+	test("omits constitution section when file is missing", () => {
+		const prompt = assemblePrompt(baseConfig, undefined, undefined, undefined, undefined, undefined, TEST_CONFIG_DIR);
+		expect(prompt).not.toContain("# Constitution\n\n# Phantom Constitution");
+	});
+
+	test("omits constitution section when file is empty", () => {
+		writeFileSync(join(TEST_CONFIG_DIR, "constitution.md"), "");
+		const prompt = assemblePrompt(baseConfig, undefined, undefined, undefined, undefined, undefined, TEST_CONFIG_DIR);
+		expect(prompt).not.toContain("# Constitution\n\n");
 	});
 });
