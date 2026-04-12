@@ -10,6 +10,8 @@ export type Session = {
 	total_cost_usd: number;
 	input_tokens: number;
 	output_tokens: number;
+	cache_read_tokens: number;
+	cache_creation_tokens: number;
 	turn_count: number;
 	created_at: string;
 	last_active_at: string;
