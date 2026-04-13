@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { PhantomConfig } from "../config/types.ts";
 import type { EvolvedConfig } from "../evolution/types.ts";
 import type { RoleTemplate } from "../roles/types.ts";
+import { buildDashboardAwarenessLines } from "./prompt-blocks/dashboard-awareness.ts";
 import { buildEvolvedSections } from "./prompt-blocks/evolved.ts";
 import { buildInstructions } from "./prompt-blocks/instructions.ts";
 import { buildSecurity } from "./prompt-blocks/security.ts";
@@ -134,6 +135,8 @@ function buildEnvironment(config: PhantomConfig): string {
 	lines.push("Markdown wrapping (no asterisks, no bold, no parentheses) so Slack renders it cleanly.");
 	lines.push("");
 	lines.push(...buildUIGuidanceLines(publicUrl ?? undefined));
+	lines.push("");
+	lines.push(...buildDashboardAwarenessLines(publicUrl ?? undefined));
 	lines.push("");
 	lines.push("SELF-VALIDATE EVERY UI PAGE YOU CREATE.");
 	lines.push("After phantom_create_page succeeds, always call phantom_preview_page with");
