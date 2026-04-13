@@ -190,7 +190,7 @@ export class AgentRuntime {
 					model: this.config.model,
 					permissionMode: "bypassPermissions",
 					allowDangerouslySkipPermissions: true,
-					settingSources: ["project"],
+					settingSources: ["project", "user"],
 					systemPrompt: {
 						type: "preset" as const,
 						preset: "claude_code" as const,
