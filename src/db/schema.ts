@@ -103,4 +103,33 @@ export const MIGRATIONS: string[] = [
 	// "dropped:<reason>" = skipped at the delivery branch, "error:<reason>" =
 	// Slack threw during send. Existing rows keep null on migration.
 	"ALTER TABLE scheduled_jobs ADD COLUMN last_delivery_status TEXT",
+
+	// PR1 dashboard: skills editor audit log. Every create/update/delete from
+	// the UI API writes a row here so the user can see the history of their
+	// skills. Agent-originated edits (via the Write tool) are not captured
+	// today; a future PR may add a file-watcher.
+	`CREATE TABLE IF NOT EXISTS skill_audit_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		skill_name TEXT NOT NULL,
+		action TEXT NOT NULL,
+		previous_body TEXT,
+		new_body TEXT,
+		actor TEXT NOT NULL,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`,
+
+	"CREATE INDEX IF NOT EXISTS idx_skill_audit_log_name ON skill_audit_log(skill_name, id DESC)",
+
+	// PR1 dashboard: memory file editor audit log. Same pattern as skills.
+	`CREATE TABLE IF NOT EXISTS memory_file_audit_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		file_path TEXT NOT NULL,
+		action TEXT NOT NULL,
+		previous_content TEXT,
+		new_content TEXT,
+		actor TEXT NOT NULL,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`,
+
+	"CREATE INDEX IF NOT EXISTS idx_memory_file_audit_log_path ON memory_file_audit_log(file_path, id DESC)",
 ];
