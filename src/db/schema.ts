@@ -210,4 +210,19 @@ export const MIGRATIONS: string[] = [
 	// _migrations gate.
 	"ALTER TABLE subagent_audit_log ADD COLUMN previous_frontmatter_json TEXT",
 	"ALTER TABLE subagent_audit_log ADD COLUMN new_frontmatter_json TEXT",
+
+	// Phase 2 evolution cadence: sessions that passed the conditional firing
+	// gate wait here until the cadence cron or the demand trigger drains the
+	// queue into the batch processor. Rows are removed on successful drain;
+	// a crashed drain leaves them in place so the next tick can retry them.
+	`CREATE TABLE IF NOT EXISTS evolution_queue (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id TEXT NOT NULL,
+		session_key TEXT NOT NULL,
+		gate_decision_json TEXT NOT NULL,
+		session_summary_json TEXT NOT NULL,
+		enqueued_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`,
+
+	"CREATE INDEX IF NOT EXISTS idx_evolution_queue_enqueued_at ON evolution_queue(enqueued_at)",
 ];

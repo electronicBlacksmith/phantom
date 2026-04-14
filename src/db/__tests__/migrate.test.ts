@@ -41,8 +41,10 @@ describe("runMigrations", () => {
 		// the total from the PR2 baseline of 16 up to 22. The PR3 fix pass
 		// appends two ALTER TABLE statements on subagent_audit_log to add
 		// previous_frontmatter_json and new_frontmatter_json columns,
-		// bringing the total to 24.
-		expect(migrationCount.count).toBe(24);
+		// bringing the total to 24. Phase 2 evolution cadence adds the
+		// evolution_queue table and its enqueued_at index, bringing the
+		// total to 26.
+		expect(migrationCount.count).toBe(26);
 	});
 
 	test("tracks applied migration indices", () => {
@@ -54,7 +56,9 @@ describe("runMigrations", () => {
 			.all()
 			.map((r) => (r as { index_num: number }).index_num);
 
-		expect(indices).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+		expect(indices).toEqual([
+			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+		]);
 	});
 
 	test("subagent_audit_log has frontmatter JSON columns after migration", () => {
@@ -66,5 +70,15 @@ describe("runMigrations", () => {
 			.map((r) => (r as { name: string }).name);
 		expect(cols).toContain("previous_frontmatter_json");
 		expect(cols).toContain("new_frontmatter_json");
+	});
+
+	test("evolution_queue table exists after migration", () => {
+		const db = freshDb();
+		runMigrations(db);
+		const row = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='evolution_queue'").get() as {
+			name: string;
+		} | null;
+		expect(row).not.toBeNull();
+		expect(row?.name).toBe("evolution_queue");
 	});
 });

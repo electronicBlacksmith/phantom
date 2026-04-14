@@ -226,3 +226,17 @@ export const QualityAssessmentResult = z.object({
 });
 
 export type QualityAssessmentResultType = z.infer<typeof QualityAssessmentResult>;
+
+// -- Conditional Firing Gate (Phase 1) --
+//
+// Haiku inspects a compact session summary and decides whether the evolution
+// pipeline should fire. Pure binary output plus a short reason. Keeping the
+// schema intentionally tiny minimises Haiku's output token spend and keeps the
+// parse failure surface as small as possible.
+
+export const GateJudgeResult = z.object({
+	evolve: z.boolean().describe("True if the session is worth learning from, false otherwise."),
+	reason: z.string().max(400).describe("Short natural-language justification, under 40 words."),
+});
+
+export type GateJudgeResultType = z.infer<typeof GateJudgeResult>;

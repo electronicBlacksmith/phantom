@@ -33,7 +33,9 @@ import {
 import { closeDatabase, getDatabase } from "./db/connection.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { createEmailToolServer } from "./email/tool.ts";
+import { EvolutionCadence, loadCadenceConfig } from "./evolution/cadence.ts";
 import { EvolutionEngine } from "./evolution/engine.ts";
+import { EvolutionQueue } from "./evolution/queue.ts";
 import type { SessionSummary } from "./evolution/types.ts";
 import { PeerHealthMonitor } from "./mcp/peer-health.ts";
 import { PeerManager } from "./mcp/peers.ts";
@@ -108,12 +110,26 @@ async function main(): Promise<void> {
 	const runtime = new AgentRuntime(config, db);
 
 	let evolution: EvolutionEngine | null = null;
+	let evolutionCadence: EvolutionCadence | null = null;
 	try {
 		evolution = new EvolutionEngine(undefined, runtime);
 		const currentVersion = evolution.getCurrentVersion();
 		const judgeMode = evolution.usesLLMJudges() ? "LLM judges" : "heuristic";
 		console.log(`[evolution] Engine initialized (v${currentVersion}, ${judgeMode})`);
 		setEvolutionVersionProvider(() => evolution?.getCurrentVersion() ?? 0);
+
+		// Phase 2: persistent queue + cadence scheduler. The cadence starts
+		// here so cron ticks begin immediately after boot. Demand triggers
+		// route through `onEnqueue` which fires a drain whenever the queue
+		// depth crosses `demandTriggerDepth`.
+		const queue = new EvolutionQueue(db);
+		const cadenceConfig = loadCadenceConfig(evolution.getEvolutionConfig());
+		evolutionCadence = new EvolutionCadence(evolution, queue, evolution.getEvolutionConfig(), cadenceConfig);
+		evolution.setQueueWiring(queue, () => evolutionCadence?.onEnqueue());
+		evolutionCadence.start();
+		console.log(
+			`[evolution] Cadence started (cadence=${cadenceConfig.cadenceMinutes}min, demand_trigger=${cadenceConfig.demandTriggerDepth})`,
+		);
 	} catch (err: unknown) {
 		const msg = err instanceof Error ? err.message : String(err);
 		console.warn(`[evolution] Failed to initialize: ${msg}. Running without self-evolution.`);
@@ -151,9 +167,15 @@ async function main(): Promise<void> {
 				ended_at: new Date(signal.timestamp).toISOString(),
 			};
 			evolution
-				.afterSession(sessionSummary)
-				.then((result) => {
-					if (result.changes_applied.length > 0) {
+				.enqueueIfWorthy(sessionSummary)
+				.then((enqResult) => {
+					// Phase 1 fallback path: when no queue is wired, enqueueIfWorthy
+					// runs the pipeline inline and exposes the result so the
+					// evolved config can be re-loaded. In production the cadence
+					// drains the queue out-of-band and the config reload happens
+					// after processBatch completes, not here.
+					const applied = enqResult.inlineResult?.changes_applied.length ?? 0;
+					if (applied > 0) {
 						const updatedConfig = evolution?.getConfig();
 						if (updatedConfig) runtime.setEvolvedConfig(updatedConfig);
 					}
@@ -558,9 +580,10 @@ async function main(): Promise<void> {
 			};
 
 			evolution
-				.afterSession(sessionSummary)
-				.then((result) => {
-					if (result.changes_applied.length > 0) {
+				.enqueueIfWorthy(sessionSummary)
+				.then((enqResult) => {
+					const applied = enqResult.inlineResult?.changes_applied.length ?? 0;
+					if (applied > 0) {
 						const updatedConfig = evolution?.getConfig();
 						if (updatedConfig) {
 							runtime.setEvolvedConfig(updatedConfig);
@@ -588,6 +611,9 @@ async function main(): Promise<void> {
 	});
 	onShutdown("Scheduler", async () => {
 		if (scheduler) scheduler.stop();
+	});
+	onShutdown("Evolution cadence", async () => {
+		evolutionCadence?.stop();
 	});
 	onShutdown("Preview browser", async () => {
 		await closePreviewResources();

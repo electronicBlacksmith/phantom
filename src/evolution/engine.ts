@@ -6,6 +6,8 @@ import { applyApproved } from "./application.ts";
 import { type EvolutionConfig, loadEvolutionConfig } from "./config.ts";
 import { recordObservations, runConsolidation } from "./consolidation.ts";
 import { ConstitutionChecker } from "./constitution.ts";
+import type { GateDecision } from "./gate-types.ts";
+import { appendGateLog, decideGate, recordGateDecision } from "./gate.ts";
 import { addCase, loadSuite, pruneSuite } from "./golden-suite.ts";
 import { runQualityJudge } from "./judges/quality-judge.ts";
 import { type JudgeCosts, emptyJudgeCosts } from "./judges/types.ts";
@@ -18,6 +20,7 @@ import {
 	updateAfterRollback,
 	updateAfterSession,
 } from "./metrics.ts";
+import type { EvolutionQueue } from "./queue.ts";
 import {
 	buildCritiqueFromObservations,
 	extractObservations,
@@ -27,6 +30,12 @@ import {
 import type { EvolutionResult, EvolutionVersion, EvolvedConfig, GoldenCase, SessionSummary } from "./types.ts";
 import { CycleAborted, validateAll, validateAllWithJudges } from "./validation.ts";
 import { getHistory, readVersion, rollback as versionRollback } from "./versioning.ts";
+
+export type EnqueueResult = {
+	enqueued: boolean;
+	decision: GateDecision;
+	inlineResult?: EvolutionResult;
+};
 
 export class EvolutionEngine {
 	private config: EvolutionConfig;
@@ -53,6 +62,11 @@ export class EvolutionEngine {
 	private activeCycleSessionId: string | null = null;
 	private activeCycleSkipCount = 0;
 
+	// Phase 1 + 2 wiring. The queue is optional so engine unit tests that do
+	// not care about batching can still construct a bare engine.
+	private queue: EvolutionQueue | null = null;
+	private onEnqueue: (() => void) | null = null;
+
 	// `runtime` is optional so existing tests and heuristic-only deployments can
 	// construct an engine without wiring a full AgentRuntime. When the engine
 	// is asked to use LLM judges but has no runtime, it falls back to heuristics.
@@ -70,6 +84,17 @@ export class EvolutionEngine {
 
 	setRuntime(runtime: AgentRuntime): void {
 		this.runtime = runtime;
+	}
+
+	/**
+	 * Wire the queue plumbing for Phase 2. Called from `src/index.ts` after
+	 * the evolution queue and cadence have been constructed. Keeping these
+	 * as setters rather than constructor args preserves the existing test
+	 * shape (most engine tests do not care about the queue).
+	 */
+	setQueueWiring(queue: EvolutionQueue, onEnqueue: () => void): void {
+		this.queue = queue;
+		this.onEnqueue = onEnqueue;
 	}
 
 	private resolveJudgeMode(): boolean {
@@ -132,6 +157,46 @@ export class EvolutionEngine {
 	}
 
 	/**
+	 * Phase 1 + 2 entry point. Runs the conditional firing gate on the
+	 * session summary, logs the decision, records gate stats, and either
+	 * drops the session (fire=false) or enqueues it for cadence processing
+	 * (fire=true). Runs OUTSIDE the evolution mutex: the gate is cheap and
+	 * serializing gate calls through the mutex would defeat the purpose.
+	 */
+	async enqueueIfWorthy(session: SessionSummary): Promise<EnqueueResult> {
+		updateAfterSession(this.config, session.outcome, false);
+		const decision = await decideGate(session, this.runtime);
+		appendGateLog(this.config, session, decision);
+		recordGateDecision(this.config, decision);
+
+		if (!decision.fire) {
+			return { enqueued: false, decision };
+		}
+
+		if (this.queue) {
+			this.queue.enqueue(session, decision);
+			this.onEnqueue?.();
+			return { enqueued: true, decision };
+		}
+
+		// Fallback path: no queue wired. This is the shape unit tests exercise
+		// when they construct a bare EvolutionEngine. We keep behaviour close
+		// to the legacy afterSession call so existing assertions still pass.
+		const result = await this.afterSessionInternal(session);
+		return { enqueued: false, decision, inlineResult: result };
+	}
+
+	/**
+	 * Phase 2 batch processor entry point. Called once per queued session by
+	 * `batch-processor.ts` inside the Phase 0 mutex. Publicly exposed so the
+	 * batch processor does not need to reach into private state; Phase 3 will
+	 * replace the batch processor body entirely and this method becomes dead.
+	 */
+	async runSingleSessionPipeline(session: SessionSummary): Promise<EvolutionResult> {
+		return this.afterSessionInternal(session);
+	}
+
+	/**
 	 * Main entry point: run the full 6-step evolution pipeline after a session.
 	 * When useLLMJudges is true, uses Sonnet-powered judges for observation
 	 * extraction, safety gate, constitution gate, regression gate, and quality
@@ -139,10 +204,15 @@ export class EvolutionEngine {
 	 *
 	 * Phase 0 safety floor: calls that arrive while another cycle is in
 	 * flight return immediately with a skipped result and no judge
-	 * subprocesses spawned. Phase 2 will replace this drop-on-floor behavior
-	 * with a real cadence queue.
+	 * subprocesses spawned. Phase 2 replaced `afterSession` as the primary
+	 * entry point with `enqueueIfWorthy`; direct callers still work and the
+	 * mutex guard remains the same.
 	 */
 	async afterSession(session: SessionSummary): Promise<EvolutionResult> {
+		return this.afterSessionInternal(session);
+	}
+
+	private async afterSessionInternal(session: SessionSummary): Promise<EvolutionResult> {
 		// Always bump the session counter so the dashboard's `session_count`
 		// reflects every turn that arrived, including skipped ones. On the skip
 		// path we pass `hadCorrections=false` because no observation extraction
