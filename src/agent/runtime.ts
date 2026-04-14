@@ -13,6 +13,7 @@ import { type JudgeQueryOptions, type JudgeQueryResult, runJudgeQuery } from "./
 import { extractCost, extractTextFromMessage } from "./message-utils.ts";
 import { assemblePrompt } from "./prompt-assembler.ts";
 import { SessionStore } from "./session-store.ts";
+import { buildAgentEnv } from "./subprocess-env.ts";
 
 export type RuntimeEvent =
 	| { type: "init"; sessionId: string }
@@ -246,7 +247,7 @@ export class AgentRuntime {
 					effort: this.config.effort,
 					...(this.config.max_budget_usd > 0 ? { maxBudgetUsd: this.config.max_budget_usd } : {}),
 					abortController: controller,
-					env: { ...process.env, ...providerEnv },
+					env: buildAgentEnv(providerEnv),
 					hooks: {
 						PreToolUse: [commandBlocker],
 						PostToolUse: [fileTracker.hook],

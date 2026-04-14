@@ -4,6 +4,13 @@ import { z } from "zod";
 import { getInstallationToken } from "../integrations/github-app.ts";
 import { buildSafeEnv } from "../mcp/dynamic-handlers.ts";
 import type { DynamicToolRegistry } from "../mcp/dynamic-tools.ts";
+import { type ProcessLimits, drainProcessWithLimits } from "../utils/process.ts";
+
+/** Limits for phantom_gh_exec command execution */
+const GH_EXEC_LIMITS: ProcessLimits = {
+	timeoutMs: 120_000, // 2 minutes
+	maxOutputBytes: 1_000_000, // 1 MB
+};
 
 /**
  * Creates an in-process SDK MCP server that exposes dynamic tool management
@@ -124,6 +131,100 @@ export function createInProcessToolServer(registry: DynamicToolRegistry): McpSdk
 const SHELL_METACHARACTERS = /[;|&$`><(){}[\]]/;
 
 /**
+ * Subcommands blocked for gh CLI due to token disclosure risk.
+ *
+ * - auth: `gh auth token` prints the GH_TOKEN
+ * - secret: repository secrets management
+ * - config: credential configuration
+ * - ssh-key: SSH key management
+ * - gpg-key: GPG key management
+ */
+const GH_BLOCKED_SUBCOMMANDS = new Set(["auth", "secret", "config", "ssh-key", "gpg-key"]);
+
+/**
+ * Validate that a gh/git command doesn't use subcommands that could leak tokens.
+ *
+ * For gh: blocks known token-disclosure subcommands (auth, secret, etc.)
+ * For git: blocks -c flag which can run arbitrary commands via alias.x=!cmd
+ */
+export function validateGhSubcommand(
+	binary: "gh" | "git",
+	args: string[],
+): { valid: true } | { valid: false; error: string } {
+	if (binary === "gh") {
+		// First positional argument is the subcommand
+		const subcommand = args[0]?.toLowerCase();
+		if (subcommand && GH_BLOCKED_SUBCOMMANDS.has(subcommand)) {
+			return {
+				valid: false,
+				error: `The 'gh ${subcommand}' subcommand is blocked because it can expose authentication tokens.`,
+			};
+		}
+	}
+
+	if (binary === "git") {
+		// Block -c flag which can run arbitrary commands via alias.x=!cmd
+		// e.g., git -c alias.x=!env x -> prints all env vars including GH_TOKEN
+		for (const arg of args) {
+			if (arg === "-c" || arg.startsWith("-c=") || arg.startsWith("--config=")) {
+				return {
+					valid: false,
+					error:
+						"The 'git -c' flag is blocked because it can execute arbitrary commands. Use 'git config --local' instead.",
+				};
+			}
+		}
+	}
+
+	return { valid: true };
+}
+
+/**
+ * Patterns that match GitHub tokens in output.
+ *
+ * - ghs_: GitHub App installation access tokens
+ * - gho_: OAuth access tokens
+ * - ghp_: Personal access tokens (classic)
+ * - ghu_: User-to-server tokens
+ * - github_pat_: Fine-grained personal access tokens
+ */
+const GITHUB_TOKEN_PATTERNS = [
+	/\bgh[spou]_[A-Za-z0-9]{36,}\b/g, // ghs_, gho_, ghp_, ghu_
+	/\bgithub_pat_[A-Za-z0-9_]{59,}\b/g, // fine-grained PATs
+];
+
+/**
+ * Redact GitHub tokens from command output as defense-in-depth.
+ *
+ * Even though we block commands that print tokens (gh auth token, git -c alias),
+ * this provides an additional safety layer in case a new disclosure vector is
+ * discovered or the blocklist is bypassed.
+ *
+ * @param text - The output text to scan
+ * @param knownToken - The specific token used in this execution (always redacted)
+ * @returns Text with tokens replaced by [REDACTED]
+ */
+export function redactTokensFromOutput(text: string, knownToken: string): string {
+	if (!text) return text;
+
+	let result = text;
+
+	// Always redact the known token first (exact match)
+	if (knownToken && result.includes(knownToken)) {
+		result = result.replaceAll(knownToken, "[REDACTED]");
+	}
+
+	// Then scan for any other GitHub token patterns
+	for (const pattern of GITHUB_TOKEN_PATTERNS) {
+		// Reset regex state (global flag)
+		pattern.lastIndex = 0;
+		result = result.replace(pattern, "[REDACTED]");
+	}
+
+	return result;
+}
+
+/**
  * Validate that args don't contain shell metacharacters.
  * Since we use Bun.spawn with args array, the shell doesn't interpret these,
  * but we reject them anyway as defense in depth.
@@ -163,6 +264,15 @@ export async function executeGhExec(
 ): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
 	const tokenGetter = options?.tokenGetter ?? getInstallationToken;
 
+	// Validate subcommand isn't a token-disclosure command
+	const subcommandValidation = validateGhSubcommand(input.binary, input.args);
+	if (!subcommandValidation.valid) {
+		return {
+			content: [{ type: "text" as const, text: JSON.stringify({ error: subcommandValidation.error }) }],
+			isError: true,
+		};
+	}
+
 	// Validate args for shell metacharacters
 	const validation = validateGhExecArgs(input.args);
 	if (!validation.valid) {
@@ -187,17 +297,34 @@ export async function executeGhExec(
 			cwd: input.cwd,
 		});
 
-		// Read stdout and stderr
-		const stdoutText = await new Response(proc.stdout).text();
-		const stderrText = await new Response(proc.stderr).text();
-		const exitCode = await proc.exited;
-
-		// Build result - NEVER include the token
-		const result = {
-			stdout: stdoutText.trim(),
-			stderr: stderrText.trim(),
+		// Drain stdout/stderr concurrently with timeout and output limits
+		const {
+			stdout: rawStdout,
+			stderr: rawStderr,
 			exitCode,
-		};
+			timedOut,
+		} = await drainProcessWithLimits(proc, GH_EXEC_LIMITS);
+
+		if (timedOut) {
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify({
+							error: `Command timed out after ${GH_EXEC_LIMITS.timeoutMs / 1000} seconds`,
+							partialStderr: redactTokensFromOutput(rawStderr.slice(0, 500), token),
+						}),
+					},
+				],
+				isError: true,
+			};
+		}
+
+		// Redact any tokens from output as defense-in-depth
+		const stdout = redactTokensFromOutput(rawStdout.trim(), token);
+		const stderr = redactTokensFromOutput(rawStderr.trim(), token);
+
+		const result = { stdout, stderr, exitCode };
 
 		if (exitCode !== 0) {
 			return {
