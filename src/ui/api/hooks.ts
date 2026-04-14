@@ -3,8 +3,14 @@
 //   GET    /ui/api/hooks                  -> list slice + allowlist + trust state + count
 //   POST   /ui/api/hooks                  -> install (body: { event, matcher?, definition })
 //   PUT    /ui/api/hooks/:event/:g/:h     -> update the hook at position (g, h)
+//                                            If the body also carries a `to`
+//                                            coordinate with a different event
+//                                            or matcher, the call is routed
+//                                            through relocateHook instead for
+//                                            an atomic event/matcher change.
 //   DELETE /ui/api/hooks/:event/:g/:h     -> uninstall
 //   POST   /ui/api/hooks/trust            -> record first-install trust acceptance
+//                                            (body: { hook_type }) scoped per type.
 //   GET    /ui/api/hooks/audit            -> audit timeline
 //
 // JSON in, JSON out. All writes route through src/plugins/settings-io.ts which
@@ -12,9 +18,9 @@
 // stays byte-for-byte identical.
 
 import type { Database } from "bun:sqlite";
-import { hasAcceptedHookTrust, listHookAudit, recordHookEdit } from "../../hooks/audit.ts";
+import { getHookTrustMap, hasAcceptedHookTrust, listHookAudit, recordHookEdit } from "../../hooks/audit.ts";
 import { HookDefinitionSchema, type HookEvent, HookEventSchema } from "../../hooks/schema.ts";
-import { installHook, listHooks, uninstallHook, updateHook } from "../../hooks/storage.ts";
+import { installHook, listHooks, relocateHook, uninstallHook, updateHook } from "../../hooks/storage.ts";
 
 type HooksApiDeps = {
 	db: Database;
@@ -78,6 +84,7 @@ export async function handleHooksApi(req: Request, url: URL, deps: HooksApiDeps)
 			total: result.total,
 			allowed_http_hook_urls: result.allowedHttpHookUrls ?? null,
 			trust_accepted: hasAcceptedHookTrust(deps.db),
+			trust_by_type: getHookTrustMap(deps.db),
 		});
 	}
 
@@ -112,10 +119,20 @@ export async function handleHooksApi(req: Request, url: URL, deps: HooksApiDeps)
 	}
 
 	if (pathname === "/ui/api/hooks/trust" && req.method === "POST") {
+		const body = await readJson(req);
+		const hookType =
+			body && typeof body === "object" && "hook_type" in body ? (body as { hook_type?: unknown }).hook_type : undefined;
+		// Default to "command" if the client did not specify a type so
+		// pre-fix clients keep working. New clients pass the type
+		// explicitly for per-type scoping.
+		const typed =
+			typeof hookType === "string" && ["command", "prompt", "agent", "http"].includes(hookType)
+				? (hookType as "command" | "prompt" | "agent" | "http")
+				: "command";
 		recordHookEdit(deps.db, {
 			event: "<trust>",
 			matcher: undefined,
-			hookType: null,
+			hookType: typed,
 			action: "trust_accepted",
 			previousSlice: null,
 			newSlice: null,
@@ -142,18 +159,66 @@ export async function handleHooksApi(req: Request, url: URL, deps: HooksApiDeps)
 			if (body && typeof body === "object" && "__error" in body) {
 				return json({ error: (body as { __error: string }).__error }, { status: 400 });
 			}
-			const defShape = (body as { definition?: unknown } | null)?.definition;
+			const shape = body as { definition?: unknown; to?: { event?: unknown; matcher?: unknown } } | null;
+			const defShape = shape?.definition;
 			const defParsed = HookDefinitionSchema.safeParse(defShape);
 			if (!defParsed.success) {
 				const issue = defParsed.error.issues[0];
 				const path = issue.path.length > 0 ? issue.path.join(".") : "definition";
 				return json({ error: `${path}: ${issue.message}` }, { status: 422 });
 			}
+
+			// Detect whether the caller is asking for a relocate. If the
+			// `to` coordinate pair is present and either the event or
+			// matcher differs from the source, we route through
+			// relocateHook so the move is a single atomic write.
+			const toRaw = shape?.to;
+			if (toRaw && typeof toRaw === "object") {
+				const toEvParsed = HookEventSchema.safeParse((toRaw as { event?: unknown }).event);
+				if (!toEvParsed.success) {
+					return json({ error: `to.event: ${toEvParsed.error.issues[0].message}` }, { status: 422 });
+				}
+				const toMatcherRaw = (toRaw as { matcher?: unknown }).matcher;
+				if (toMatcherRaw !== undefined && toMatcherRaw !== null && typeof toMatcherRaw !== "string") {
+					return json({ error: "to.matcher must be a string if present" }, { status: 422 });
+				}
+				const toMatcher = typeof toMatcherRaw === "string" && toMatcherRaw.length > 0 ? toMatcherRaw : undefined;
+
+				const result = relocateHook(
+					{
+						fromEvent: event,
+						fromGroupIndex: groupIndex,
+						fromHookIndex: hookIndex,
+						toEvent: toEvParsed.data,
+						toMatcher,
+						definition: defParsed.data,
+					},
+					deps.settingsPath,
+				);
+				if (!result.ok) return json({ error: result.error }, { status: result.status });
+				recordHookEdit(deps.db, {
+					event,
+					matcher: result.previousMatcher,
+					hookType: defParsed.data.type,
+					action: "relocate",
+					previousSlice: result.previousSlice,
+					newSlice: result.slice,
+					definition: defParsed.data,
+					actor: "user",
+				});
+				return json({
+					slice: result.slice,
+					event: toEvParsed.data,
+					groupIndex: result.newGroupIndex,
+					hookIndex: result.newHookIndex,
+				});
+			}
+
 			const result = updateHook({ event, groupIndex, hookIndex, definition: defParsed.data }, deps.settingsPath);
 			if (!result.ok) return json({ error: result.error }, { status: result.status });
 			recordHookEdit(deps.db, {
 				event,
-				matcher: undefined,
+				matcher: result.previousMatcher,
 				hookType: defParsed.data.type,
 				action: "update",
 				previousSlice: result.previousSlice,
@@ -169,8 +234,8 @@ export async function handleHooksApi(req: Request, url: URL, deps: HooksApiDeps)
 			if (!result.ok) return json({ error: result.error }, { status: result.status });
 			recordHookEdit(deps.db, {
 				event,
-				matcher: undefined,
-				hookType: null,
+				matcher: result.previousMatcher,
+				hookType: result.previousHookType ?? null,
 				action: "uninstall",
 				previousSlice: result.previousSlice,
 				newSlice: result.slice,

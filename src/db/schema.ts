@@ -201,4 +201,13 @@ export const MIGRATIONS: string[] = [
 	)`,
 
 	"CREATE INDEX IF NOT EXISTS idx_settings_audit_log_field ON settings_audit_log(field, id DESC)",
+
+	// PR3 fix pass: extend the subagent audit log to capture frontmatter
+	// changes. An edit that only touches tools or model would otherwise
+	// show previous_body == new_body and become invisible in the audit
+	// timeline. These columns default to NULL so pre-existing rows remain
+	// valid. SQLite ALTER TABLE with a default is idempotent under the
+	// _migrations gate.
+	"ALTER TABLE subagent_audit_log ADD COLUMN previous_frontmatter_json TEXT",
+	"ALTER TABLE subagent_audit_log ADD COLUMN new_frontmatter_json TEXT",
 ];

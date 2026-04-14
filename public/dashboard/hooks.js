@@ -77,6 +77,7 @@
 		total: 0,
 		allowedHttpHookUrls: null,
 		trustAccepted: false,
+		trustByType: { command: false, prompt: false, agent: false, http: false },
 		auditEntries: [],
 		loading: false,
 		initialized: false,
@@ -101,6 +102,15 @@
 				asyncRewake: false,
 			},
 		};
+	}
+
+	// Per-hook-type trust scoping: accepting the trust modal for command
+	// hooks does not satisfy the modal for http hooks. Http has a very
+	// different risk profile (network egress, env var interpolation)
+	// and users should opt in to that separately.
+	function isTrustedFor(hookType) {
+		if (!hookType) return false;
+		return !!(state.trustByType && state.trustByType[hookType]);
 	}
 
 	function renderHeader() {
@@ -234,6 +244,7 @@
 				'<div class="dash-form-grid">' +
 				'<label class="dash-toggle"><input type="checkbox" id="hook-once"' + (def.once ? " checked" : "") + '><span class="dash-toggle-track"></span><span>Run once then remove</span></label>' +
 				'<label class="dash-toggle"><input type="checkbox" id="hook-async"' + (def.async ? " checked" : "") + '><span class="dash-toggle-track"></span><span>Run async (non-blocking)</span></label>' +
+				'<label class="dash-toggle"><input type="checkbox" id="hook-async-rewake"' + (def.asyncRewake ? " checked" : "") + '><span class="dash-toggle-track"></span><span>Async rewake (notify on completion)</span></label>' +
 				'</div>'
 			);
 		} else if (t === "prompt" || t === "agent") {
@@ -250,15 +261,32 @@
 				'<label class="dash-toggle"><input type="checkbox" id="hook-once"' + (def.once ? " checked" : "") + '><span class="dash-toggle-track"></span><span>Run once then remove</span></label>'
 			);
 		} else if (t === "http") {
+			var envVarsJson = JSON.stringify(def.allowedEnvVars || [])
+				.replace(/&/g, "&amp;")
+				.replace(/</g, "&lt;")
+				.replace(/>/g, "&gt;")
+				.replace(/"/g, "&quot;")
+				.replace(/'/g, "&#39;");
+			var envChips = (def.allowedEnvVars || []).map(function (v, i) {
+				return '<span class="dash-chip"><span>' + esc(v) + '</span><button type="button" data-hook-env-remove="' + i + '" aria-label="Remove ' + esc(v) + '">&times;</button></span>';
+			}).join("");
 			parts.push(
 				'<div class="dash-field">' +
 				'<label class="dash-field-label" for="hook-url">URL</label>' +
 				'<input class="dash-input" id="hook-url" placeholder="https://hooks.example.com/event" value="' + esc(def.url || "") + '">' +
-				'<div class="dash-field-hint">Must match one of the allowed HTTP hook URL patterns in settings.json.</div>' +
+				'<div class="dash-field-hint">Must match an allowed HTTP hook URL pattern in settings.json. Patterns are anchored full-string; append * to allow query strings.</div>' +
 				'</div>' +
 				'<div class="dash-field">' +
 				'<label class="dash-field-label" for="hook-headers">Headers (one per line, key: value)</label>' +
 				'<textarea class="dash-textarea" id="hook-headers" placeholder="X-Source: phantom">' + esc(headersToText(def.headers)) + '</textarea>' +
+				'</div>' +
+				'<div class="dash-field">' +
+				'<label class="dash-field-label" for="hook-allowed-env">Allowed env vars</label>' +
+				'<div class="dash-chips" id="hook-allowed-env" data-env-vars="' + envVarsJson + '">' +
+				envChips +
+				'<input type="text" id="hook-allowed-env-input" placeholder="RESEND_API_KEY, PHANTOM_NAME">' +
+				'</div>' +
+				'<div class="dash-field-hint">Env var names HTTP hooks may interpolate into headers. Must match [A-Z_][A-Z0-9_]*.</div>' +
 				'</div>' +
 				'<div class="dash-field"><label class="dash-field-label" for="hook-timeout">Timeout (s)</label><input class="dash-input" id="hook-timeout" type="number" min="1" max="3600" value="' + (def.timeout || 10) + '"></div>'
 			);
@@ -411,6 +439,7 @@
 			bindSelect("hook-shell", function (v) { def.shell = v || undefined; });
 			bindCheckbox("hook-once", function (v) { def.once = v; });
 			bindCheckbox("hook-async", function (v) { def.async = v; });
+			bindCheckbox("hook-async-rewake", function (v) { def.asyncRewake = v; });
 		} else if (t === "prompt" || t === "agent") {
 			bindInput("hook-prompt", function (v) { def.prompt = v; });
 			bindInput("hook-timeout", function (v) { def.timeout = v ? parseInt(v, 10) : undefined; });
@@ -420,7 +449,47 @@
 			bindInput("hook-url", function (v) { def.url = v; });
 			bindInput("hook-headers", function (v) { def.headers = parseHeadersText(v); });
 			bindInput("hook-timeout", function (v) { def.timeout = v ? parseInt(v, 10) : undefined; });
+			wireHookEnvVarsChips(def);
 		}
+	}
+
+	function wireHookEnvVarsChips(def) {
+		var container = document.getElementById("hook-allowed-env");
+		var input = document.getElementById("hook-allowed-env-input");
+		if (!container || !input) return;
+		function items() { try { return JSON.parse(container.getAttribute("data-env-vars") || "[]"); } catch (_) { return []; } }
+		function save(next) {
+			container.setAttribute("data-env-vars", JSON.stringify(next));
+			def.allowedEnvVars = next.length > 0 ? next : undefined;
+			updatePreview();
+			updateSaveEnabled();
+		}
+		input.addEventListener("keydown", function (e) {
+			if (e.key === "Enter" || e.key === ",") {
+				e.preventDefault();
+				var v = input.value.trim().replace(/,$/, "");
+				if (!v) return;
+				if (!/^[A-Z_][A-Z0-9_]*$/.test(v)) {
+					ctx.toast("error", "Invalid env var name", "Env var names must match [A-Z_][A-Z0-9_]*.");
+					return;
+				}
+				var existing = items();
+				if (existing.indexOf(v) < 0) existing.push(v);
+				input.value = "";
+				save(existing);
+				// Re-render to show the new chip.
+				render();
+			}
+		});
+		container.querySelectorAll("[data-hook-env-remove]").forEach(function (btn) {
+			btn.addEventListener("click", function () {
+				var idx = parseInt(btn.getAttribute("data-hook-env-remove"), 10);
+				var existing = items();
+				existing.splice(idx, 1);
+				save(existing);
+				render();
+			});
+		});
 	}
 
 	function bindInput(id, setter) {
@@ -471,13 +540,11 @@
 	}
 
 	function startNewRule() {
-		if (!state.trustAccepted) {
-			showTrustModal(function () {
-				state.editing = { mode: "new", draft: blankDraft() };
-				render();
-			});
-			return;
-		}
+		// The trust modal scopes to the draft's current hook type. A
+		// user who already accepted for command hooks still sees it for
+		// their first http hook because http is a different risk
+		// profile. Type check happens again at save time so a type
+		// switch inside the builder gets caught.
 		state.editing = { mode: "new", draft: blankDraft() };
 		render();
 	}
@@ -503,6 +570,14 @@
 		var cleaned = cleanDefinition(d.definition);
 		cleaned.type = d.definition.type;
 
+		// Fire the trust modal the first time the operator installs a
+		// given hook type. The check is per-type so accepting command
+		// hooks does not silently cover http, agent, or prompt.
+		if (!isTrustedFor(d.definition.type)) {
+			showTrustModal(d.definition.type, function () { saveRule(); });
+			return;
+		}
+
 		var promise;
 		if (state.editing.mode === "new") {
 			promise = ctx.api("POST", "/ui/api/hooks", {
@@ -511,9 +586,25 @@
 				definition: cleaned,
 			});
 		} else {
-			promise = ctx.api("PUT", "/ui/api/hooks/" + encodeURIComponent(state.editing.event) + "/" + state.editing.groupIndex + "/" + state.editing.hookIndex, {
-				definition: cleaned,
-			});
+			// Detect whether the operator changed the event or the
+			// matcher while in edit mode. If so, we route through the
+			// relocate path so the hook moves atomically between
+			// coordinates. Otherwise the existing in-place update
+			// route does the right thing.
+			var origEvent = state.editing.event;
+			var origMatcherRaw = (state.slice[origEvent] || [])[state.editing.groupIndex];
+			var origMatcher = origMatcherRaw ? (origMatcherRaw.matcher || "") : "";
+			var draftMatcher = d.matcher || "";
+			var isRelocate = d.event !== origEvent || draftMatcher !== origMatcher;
+			var putBody = { definition: cleaned };
+			if (isRelocate) {
+				putBody.to = { event: d.event, matcher: draftMatcher || undefined };
+			}
+			promise = ctx.api(
+				"PUT",
+				"/ui/api/hooks/" + encodeURIComponent(origEvent) + "/" + state.editing.groupIndex + "/" + state.editing.hookIndex,
+				putBody,
+			);
 		}
 
 		promise.then(function (res) {
@@ -554,21 +645,27 @@
 		});
 	}
 
-	function showTrustModal(onAccept) {
+	function showTrustModal(hookType, onAccept) {
+		var perType = {
+			command: "Command hooks run arbitrary shell commands under the agent user. Treat the command line as production code.",
+			prompt: "Prompt hooks run a small model call on the hook input. No tool calls, no side effects, but cost is real.",
+			agent: "Agent hooks run a full subagent that can decide to approve or deny. The subagent has tool access.",
+			http: "HTTP hooks POST the hook input JSON to an allowlisted URL. Env vars listed in allowedEnvVars are substituted into headers. Network egress leaves the machine.",
+		};
+		var typeLabel = hookType.charAt(0).toUpperCase() + hookType.slice(1);
 		var body = document.createElement("div");
 		body.innerHTML = (
-			'<p style="font-size:13px; line-height:1.55; margin:0 0 var(--space-3);">Hooks give the agent execution power outside the LLM turn. Before you install your first one, read this:</p>' +
+			'<p style="font-size:13px; line-height:1.55; margin:0 0 var(--space-3);">Trust for ' + esc(typeLabel) + ' hooks has not been accepted on this machine yet. Read this before you continue:</p>' +
 			'<ul style="font-size:13px; line-height:1.6; padding-left:var(--space-4); margin:0 0 var(--space-4);">' +
-			'<li>Command hooks run arbitrary shell commands under the agent user.</li>' +
-			'<li>HTTP hooks POST the hook input JSON to a URL. Env vars are only substituted into headers when listed in allowedEnvVars.</li>' +
-			'<li>Prompt and agent hooks run a small model call on the hook input.</li>' +
+			'<li>' + esc(perType[hookType] || "") + '</li>' +
 			'<li>Every hook you install is audited. You can delete any hook at any time.</li>' +
 			'<li>The agent itself can add or remove hooks via its Write tool. The dashboard captures dashboard-originated edits only.</li>' +
+			'<li>Accepting trust for one type does not accept it for the other types. Each type has a different risk profile.</li>' +
 			'</ul>' +
-			'<p style="font-size:13px; line-height:1.55; margin:0;">By clicking Accept, you acknowledge that hook execution power is real and you are taking responsibility for what you install.</p>'
+			'<p style="font-size:13px; line-height:1.55; margin:0;">By clicking Accept, you acknowledge that ' + esc(hookType) + ' hook execution power is real and you are taking responsibility for what you install.</p>'
 		);
 		ctx.openModal({
-			title: "Before you install hooks",
+			title: "Before you install " + hookType + " hooks",
 			body: body,
 			actions: [
 				{ label: "Cancel", className: "dash-btn-ghost", onClick: function () {} },
@@ -576,8 +673,10 @@
 					label: "Accept and continue",
 					className: "dash-btn-primary",
 					onClick: function () {
-						return ctx.api("POST", "/ui/api/hooks/trust", {})
+						return ctx.api("POST", "/ui/api/hooks/trust", { hook_type: hookType })
 							.then(function () {
+								if (!state.trustByType) state.trustByType = {};
+								state.trustByType[hookType] = true;
 								state.trustAccepted = true;
 								onAccept();
 							})
@@ -636,6 +735,12 @@
 			state.total = res.total || 0;
 			state.allowedHttpHookUrls = res.allowed_http_hook_urls;
 			state.trustAccepted = !!res.trust_accepted;
+			state.trustByType = res.trust_by_type || {
+				command: false,
+				prompt: false,
+				agent: false,
+				http: false,
+			};
 			render();
 		}).catch(function (err) {
 			ctx.toast("error", "Failed to load hooks", err.message || String(err));

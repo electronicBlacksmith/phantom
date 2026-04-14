@@ -303,10 +303,26 @@
 	// "plugin_init_snapshot" event that fires when the agent sees the SDK init
 	// message and resolves the enabled-plugin set. The plugins module flips
 	// optimistically-installed cards to their real state.
+	//
+	// Connection health: the browser auto-reconnects on transport errors
+	// but not on HTTP 401 or 503, which happens on session expiry or
+	// cold boot. We paint a small status dot in the sidebar that shows
+	// live / reconnecting / disconnected so the operator knows whether
+	// live updates are actually arriving.
+	function updateSSEDot(statusClass, label) {
+		var dot = document.getElementById("dashboard-sse-dot");
+		if (!dot) return;
+		dot.setAttribute("data-status", statusClass);
+		dot.setAttribute("title", label);
+	}
+
 	function openEventStream() {
 		if (!window.EventSource) return null;
 		try {
 			var es = new EventSource("/ui/api/events");
+			es.addEventListener("open", function () {
+				updateSSEDot("live", "Live updates connected");
+			});
 			es.addEventListener("plugin_init_snapshot", function (e) {
 				try {
 					var data = JSON.parse(e.data);
@@ -317,8 +333,19 @@
 					// SSE payload was malformed; nothing useful to show the user.
 				}
 			});
+			es.onerror = function (e) {
+				// EventSource auto-reconnects on transport errors. Log a
+				// soft warning for debuggers; do not toast the user.
+				console.warn("SSE error, browser will attempt reconnect", e);
+				if (es.readyState === EventSource.CONNECTING) {
+					updateSSEDot("reconnecting", "Live updates reconnecting");
+				} else if (es.readyState === EventSource.CLOSED) {
+					updateSSEDot("disconnected", "Live updates disconnected");
+				}
+			};
 			return es;
 		} catch (_) {
+			updateSSEDot("disconnected", "Live updates unavailable");
 			return null;
 		}
 	}

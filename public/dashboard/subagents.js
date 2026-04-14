@@ -22,9 +22,15 @@
 	var ctx = null;
 	var root = null;
 
+	// Model options: "" means "field absent, CLI uses its default";
+	// "inherit" is the explicit CLI sentinel that means "inherit the
+	// parent's model". We keep both with distinct labels so the operator
+	// can tell the two apart. Note: the CLI treats unset and literal
+	// "inherit" differently only in the face of advisor mode, so most
+	// operators can stick with the default.
 	var MODEL_OPTIONS = [
-		{ value: "", label: "(inherit from parent)" },
-		{ value: "inherit", label: "inherit" },
+		{ value: "", label: "(default)" },
+		{ value: "inherit", label: "inherit from parent" },
 		{ value: "opus", label: "opus" },
 		{ value: "sonnet", label: "sonnet" },
 		{ value: "haiku", label: "haiku" },
@@ -36,6 +42,25 @@
 		{ value: "high", label: "high" },
 	];
 	var COLOR_OPTIONS = ["", "red", "orange", "yellow", "green", "cyan", "blue", "purple", "magenta", "white", "gray"];
+	var MEMORY_OPTIONS = [
+		{ value: "", label: "(unset)" },
+		{ value: "user", label: "user" },
+		{ value: "project", label: "project" },
+		{ value: "local", label: "local" },
+	];
+	var PERMISSION_MODE_OPTIONS = [
+		{ value: "", label: "(unset)" },
+		{ value: "default", label: "default" },
+		{ value: "acceptEdits", label: "acceptEdits" },
+		{ value: "bypassPermissions", label: "bypassPermissions" },
+		{ value: "plan", label: "plan" },
+		{ value: "dontAsk", label: "dontAsk" },
+		{ value: "auto", label: "auto" },
+	];
+	var ISOLATION_OPTIONS = [
+		{ value: "", label: "(unset)" },
+		{ value: "worktree", label: "worktree" },
+	];
 
 	function esc(s) { return ctx.esc(s); }
 
@@ -49,6 +74,16 @@
 			JSON.stringify(fm.value) !== JSON.stringify(state.lastLoadedFrontmatter);
 	}
 
+	function readChipData(id) {
+		var el = document.getElementById(id);
+		if (!el) return [];
+		try {
+			return JSON.parse(el.getAttribute("data-chips") || "[]");
+		} catch (_) {
+			return [];
+		}
+	}
+
 	function collectFrontmatter() {
 		var nameEl = document.getElementById("subagent-field-name");
 		var descEl = document.getElementById("subagent-field-description");
@@ -56,19 +91,46 @@
 		var effortEl = document.getElementById("subagent-field-effort");
 		var colorEl = document.getElementById("subagent-field-color");
 		var memoryEl = document.getElementById("subagent-field-memory");
-		var toolsEl = document.getElementById("subagent-field-tools");
+		var maxTurnsEl = document.getElementById("subagent-field-maxTurns");
+		var initialPromptEl = document.getElementById("subagent-field-initialPrompt");
+		var backgroundEl = document.getElementById("subagent-field-background");
+		var isolationEl = document.getElementById("subagent-field-isolation");
+		var permissionModeEl = document.getElementById("subagent-field-permissionMode");
 		if (!nameEl) return { ok: false };
 		var name = nameEl.value.trim();
-		var fm = {
-			name: name,
-			description: (descEl.value || "").trim(),
-		};
-		var tools = toolsEl ? JSON.parse(toolsEl.getAttribute("data-tools") || "[]") : [];
-		if (tools.length > 0) fm.tools = tools;
-		if (modelEl && modelEl.value) fm.model = modelEl.value;
-		if (effortEl && effortEl.value) fm.effort = effortEl.value;
-		if (colorEl && colorEl.value) fm.color = colorEl.value;
-		if (memoryEl && memoryEl.value.trim()) fm.memory = memoryEl.value.trim();
+		// Start from the passthrough baseline so any forward-compat SDK
+		// fields the editor did not render survive a save round trip.
+		var fm = {};
+		if (state.lastLoadedFrontmatter && typeof state.lastLoadedFrontmatter === "object") {
+			Object.keys(state.lastLoadedFrontmatter).forEach(function (k) {
+				fm[k] = state.lastLoadedFrontmatter[k];
+			});
+		}
+		fm.name = name;
+		fm.description = (descEl.value || "").trim();
+		var tools = readChipData("subagent-field-tools");
+		if (tools.length > 0) fm.tools = tools; else delete fm.tools;
+		var disallowed = readChipData("subagent-field-disallowedTools");
+		if (disallowed.length > 0) fm.disallowedTools = disallowed; else delete fm.disallowedTools;
+		var skills = readChipData("subagent-field-skills");
+		if (skills.length > 0) fm.skills = skills; else delete fm.skills;
+		var mcp = readChipData("subagent-field-mcpServers");
+		if (mcp.length > 0) fm.mcpServers = mcp; else delete fm.mcpServers;
+		if (modelEl && modelEl.value) fm.model = modelEl.value; else delete fm.model;
+		if (effortEl && effortEl.value) fm.effort = effortEl.value; else delete fm.effort;
+		if (colorEl && colorEl.value) fm.color = colorEl.value; else delete fm.color;
+		if (memoryEl && memoryEl.value) fm.memory = memoryEl.value; else delete fm.memory;
+		if (isolationEl && isolationEl.value) fm.isolation = isolationEl.value; else delete fm.isolation;
+		if (permissionModeEl && permissionModeEl.value) fm.permissionMode = permissionModeEl.value; else delete fm.permissionMode;
+		if (maxTurnsEl && maxTurnsEl.value.trim()) {
+			var n = parseInt(maxTurnsEl.value.trim(), 10);
+			if (Number.isFinite(n) && n > 0) fm.maxTurns = n;
+		} else {
+			delete fm.maxTurns;
+		}
+		if (initialPromptEl && initialPromptEl.value.trim()) fm.initialPrompt = initialPromptEl.value.trim();
+		else delete fm.initialPrompt;
+		if (backgroundEl) fm.background = !!backgroundEl.checked;
 		return { ok: true, value: fm };
 	}
 
@@ -162,20 +224,42 @@
 		);
 	}
 
-	function renderToolsChips(tools) {
-		var allowedToolsJson = JSON.stringify(tools || []).replace(/'/g, "&#39;");
-		var chips = (tools || []).map(function (t, i) {
-			return '<span class="dash-chip"><span>' + esc(t) + '</span><button type="button" data-tool-remove="' + i + '" aria-label="Remove ' + esc(t) + '">&times;</button></span>';
+	function renderChipsField(id, items, placeholder, suggestions) {
+		// Escape the JSON embedded in a data attribute so angle brackets
+		// and quotes cannot reach the DOM raw. Defense in depth; tool
+		// names are also schema-validated against a restrictive regex.
+		var chipsJson = JSON.stringify(items || [])
+			.replace(/&/g, "&amp;")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;")
+			.replace(/"/g, "&quot;")
+			.replace(/'/g, "&#39;");
+		var chips = (items || []).map(function (t, i) {
+			return '<span class="dash-chip"><span>' + esc(t) + '</span><button type="button" data-chip-remove-for="' + esc(id) + '" data-chip-index="' + i + '" aria-label="Remove ' + esc(t) + '">&times;</button></span>';
 		}).join("");
+		var list = suggestions && suggestions.length > 0
+			? ' list="' + esc(id) + '-suggestions"'
+			: "";
+		var datalist = suggestions && suggestions.length > 0
+			? '<datalist id="' + esc(id) + '-suggestions">' +
+			  suggestions.map(function (s) { return '<option value="' + esc(s) + '">'; }).join("") +
+			  '</datalist>'
+			: "";
 		return (
-			'<div class="dash-chips" id="subagent-field-tools" data-tools=\'' + allowedToolsJson + '\'>' +
+			'<div class="dash-chips" id="' + esc(id) + '" data-chips="' + chipsJson + '">' +
 			chips +
-			'<input type="text" id="subagent-field-tools-input" placeholder="Read, Write, Bash, WebFetch" list="subagent-tool-suggestions">' +
-			'<datalist id="subagent-tool-suggestions">' +
-			'<option value="Read"><option value="Write"><option value="Edit"><option value="Glob"><option value="Grep">' +
-			'<option value="Bash"><option value="WebSearch"><option value="WebFetch"><option value="Task">' +
-			'</datalist>' +
+			'<input type="text" id="' + esc(id) + '-input" placeholder="' + esc(placeholder || "") + '"' + list + '>' +
+			datalist +
 			'</div>'
+		);
+	}
+
+	function renderToolsChips(tools) {
+		return renderChipsField(
+			"subagent-field-tools",
+			tools,
+			"Read, Write, Bash, WebFetch",
+			["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebSearch", "WebFetch", "Task"],
 		);
 	}
 
@@ -220,8 +304,23 @@
 			'</div>' +
 
 			renderField("Tools", "subagent-field-tools", renderToolsChips(fm.tools), "Allowed tools. Leave empty to inherit everything from the parent.") +
+			renderField("Disallowed tools", "subagent-field-disallowedTools", renderChipsField("subagent-field-disallowedTools", fm.disallowedTools, "WebFetch, Task", []), "Tools explicitly denied to this subagent even if the parent allows them.") +
+			renderField("Skills", "subagent-field-skills", renderChipsField("subagent-field-skills", fm.skills, "grep, show-my-tools", []), "Skills this subagent can load on every invocation.") +
+			renderField("MCP servers", "subagent-field-mcpServers", renderChipsField("subagent-field-mcpServers", fm.mcpServers, "github, linear", []), "MCP server names this subagent is allowed to use.") +
 
-			renderField("Memory", "subagent-field-memory", '<textarea class="dash-textarea" id="subagent-field-memory" style="min-height:60px;">' + esc(fm.memory || "") + '</textarea>', "Free-text memory hint the subagent receives on every invocation.") +
+			'<div class="dash-form-grid">' +
+			renderField("Memory scope", "subagent-field-memory", renderSelect("subagent-field-memory", fm.memory || "", MEMORY_OPTIONS), "Memory scope the subagent reads. CLI rejects any value outside user, project, local.") +
+			renderField("Permission mode", "subagent-field-permissionMode", renderSelect("subagent-field-permissionMode", fm.permissionMode || "", PERMISSION_MODE_OPTIONS), "Permission handling override. dontAsk denies anything not pre-approved.") +
+			'</div>' +
+
+			'<div class="dash-form-grid">' +
+			renderField("Max turns", "subagent-field-maxTurns", '<input class="dash-input" id="subagent-field-maxTurns" type="number" min="1" max="200" value="' + esc(fm.maxTurns != null ? String(fm.maxTurns) : "") + '">', "Hard cap on agent turns for this subagent. Blank means inherit.") +
+			renderField("Isolation", "subagent-field-isolation", renderSelect("subagent-field-isolation", fm.isolation || "", ISOLATION_OPTIONS), "Run the subagent inside its own worktree.") +
+			'</div>' +
+
+			renderField("Initial prompt", "subagent-field-initialPrompt", '<textarea class="dash-textarea" id="subagent-field-initialPrompt" style="min-height:60px;">' + esc(fm.initialPrompt || "") + '</textarea>', "Prompt the subagent receives before any user message.") +
+
+			'<div class="dash-field"><label class="dash-toggle"><input type="checkbox" id="subagent-field-background"' + (fm.background === true ? ' checked' : '') + '><span class="dash-toggle-track"></span><span>Run in the background (non-blocking)</span></label></div>' +
 
 			renderField("Prompt body", "subagent-body", '<textarea class="dash-textarea dash-textarea-tall" id="subagent-body" spellcheck="false">' + esc(d.body) + '</textarea>', "Markdown. The system prompt the subagent runs under. Saved atomically.") +
 
@@ -266,25 +365,27 @@
 		});
 	}
 
-	function wireToolChips() {
-		var container = document.getElementById("subagent-field-tools");
-		var input = document.getElementById("subagent-field-tools-input");
+	function wireChipField(id) {
+		var container = document.getElementById(id);
+		var input = document.getElementById(id + "-input");
 		if (!container || !input) return;
-		function save(tools) {
-			container.setAttribute("data-tools", JSON.stringify(tools));
+		function items() {
+			try { return JSON.parse(container.getAttribute("data-chips") || "[]"); } catch (_) { return []; }
+		}
+		function save(next) {
+			container.setAttribute("data-chips", JSON.stringify(next));
 			render(false);
 		}
-		function tools() { return JSON.parse(container.getAttribute("data-tools") || "[]"); }
 		input.addEventListener("keydown", function (e) {
 			if (e.key === "Enter" || e.key === ",") {
 				e.preventDefault();
 				var value = input.value.trim().replace(/,$/, "");
 				if (!value) return;
-				var existing = tools();
+				var existing = items();
 				if (existing.indexOf(value) < 0) existing.push(value);
 				save(existing);
 			} else if (e.key === "Backspace" && input.value === "") {
-				var existing2 = tools();
+				var existing2 = items();
 				existing2.pop();
 				save(existing2);
 			}
@@ -292,20 +393,27 @@
 		input.addEventListener("blur", function () {
 			var value = input.value.trim();
 			if (value) {
-				var existing = tools();
+				var existing = items();
 				if (existing.indexOf(value) < 0) existing.push(value);
 				input.value = "";
 				save(existing);
 			}
 		});
-		container.querySelectorAll("[data-tool-remove]").forEach(function (btn) {
+		container.querySelectorAll('[data-chip-remove-for="' + id + '"]').forEach(function (btn) {
 			btn.addEventListener("click", function () {
-				var idx = parseInt(btn.getAttribute("data-tool-remove"), 10);
-				var existing = tools();
+				var idx = parseInt(btn.getAttribute("data-chip-index"), 10);
+				var existing = items();
 				existing.splice(idx, 1);
 				save(existing);
 			});
 		});
+	}
+
+	function wireToolChips() {
+		wireChipField("subagent-field-tools");
+		wireChipField("subagent-field-disallowedTools");
+		wireChipField("subagent-field-skills");
+		wireChipField("subagent-field-mcpServers");
 	}
 
 	function render(rewireList) {
@@ -338,10 +446,15 @@
 		var effortEl = document.getElementById("subagent-field-effort");
 		var colorEl = document.getElementById("subagent-field-color");
 		var memoryEl = document.getElementById("subagent-field-memory");
-		[bodyEl, descEl, memoryEl].forEach(function (el) {
+		var maxTurnsEl = document.getElementById("subagent-field-maxTurns");
+		var initialPromptEl = document.getElementById("subagent-field-initialPrompt");
+		var backgroundEl = document.getElementById("subagent-field-background");
+		var isolationEl = document.getElementById("subagent-field-isolation");
+		var permissionModeEl = document.getElementById("subagent-field-permissionMode");
+		[bodyEl, descEl, maxTurnsEl, initialPromptEl].forEach(function (el) {
 			if (el) el.addEventListener("input", updateDirtyState);
 		});
-		[modelEl, effortEl, colorEl].forEach(function (el) {
+		[modelEl, effortEl, colorEl, memoryEl, isolationEl, permissionModeEl, backgroundEl].forEach(function (el) {
 			if (el) el.addEventListener("change", updateDirtyState);
 		});
 

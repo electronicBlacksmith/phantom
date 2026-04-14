@@ -130,19 +130,228 @@ describe("writeCurated: byte-for-byte preservation", () => {
 		expect(result.ok).toBe(false);
 	});
 
-	test("nested object updates replace the whole slice (shallow diff)", () => {
+	test("partial nested object updates preserve untouched siblings", () => {
+		// Load a full permissions object with every field set. Submit a
+		// partial payload that only changes `allow`. Assert deny, ask, and
+		// defaultMode are byte-for-byte unchanged on disk. This is the
+		// exact shape that caused Codex P1.
+		writeSettings({
+			permissions: {
+				allow: ["Bash(git:*)"],
+				deny: ["Bash(rm:*)"],
+				ask: ["Read(~/.ssh/*)"],
+				defaultMode: "acceptEdits",
+			},
+		});
+		const result = writeCurated({ permissions: { allow: ["Bash(git:*)", "Bash(ls:*)"] } }, settingsPath);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.permissions.allow).toEqual(["Bash(git:*)", "Bash(ls:*)"]);
+		expect(after.permissions.deny).toEqual(["Bash(rm:*)"]);
+		expect(after.permissions.ask).toEqual(["Read(~/.ssh/*)"]);
+		expect(after.permissions.defaultMode).toBe("acceptEdits");
+	});
+});
+
+describe("writeCurated: partial-slice preservation per whitelist slice", () => {
+	// One test per object-valued slice in the whitelist. The shape is the
+	// same in every case: initial settings.json has a full object with
+	// multiple siblings, the client submits a partial payload changing
+	// one sibling, and we assert the others survive byte-for-byte on disk.
+
+	test("permissions.disableBypassPermissionsMode survives a permissions.allow change", () => {
+		writeSettings({
+			permissions: {
+				allow: ["Bash(git:*)"],
+				deny: [],
+				defaultMode: "default",
+				disableBypassPermissionsMode: "disable",
+			},
+		});
+		const result = writeCurated({ permissions: { allow: ["Bash(git:*)", "Bash(ls:*)"] } }, settingsPath);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.permissions.disableBypassPermissionsMode).toBe("disable");
+		expect(after.permissions.deny).toEqual([]);
+		expect(after.permissions.defaultMode).toBe("default");
+	});
+
+	test("attribution: setting commit alone preserves pr", () => {
+		writeSettings({
+			attribution: { commit: "phantom-agent", pr: "Reviewed-by: Phantom" },
+		});
+		const result = writeCurated({ attribution: { commit: "phantom-agent-v2" } }, settingsPath);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.attribution.commit).toBe("phantom-agent-v2");
+		expect(after.attribution.pr).toBe("Reviewed-by: Phantom");
+	});
+
+	test("worktree: setting symlinkDirectories alone preserves sparsePaths", () => {
+		writeSettings({
+			worktree: {
+				symlinkDirectories: ["node_modules", ".venv"],
+				sparsePaths: ["docs", "tests"],
+			},
+		});
+		const result = writeCurated({ worktree: { symlinkDirectories: ["node_modules"] } }, settingsPath);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.worktree.symlinkDirectories).toEqual(["node_modules"]);
+		expect(after.worktree.sparsePaths).toEqual(["docs", "tests"]);
+	});
+
+	test("sandbox: setting enabled alone preserves every other sandbox field", () => {
+		writeSettings({
+			sandbox: {
+				enabled: false,
+				failIfUnavailable: true,
+				autoAllowBashIfSandboxed: true,
+				allowUnsandboxedCommands: false,
+				excludedCommands: ["docker", "kubectl"],
+				network: { allowedDomains: ["example.com"], allowLocalBinding: false },
+				filesystem: { allowWrite: ["/tmp"], denyRead: ["/etc/shadow"] },
+			},
+		});
+		const result = writeCurated({ sandbox: { enabled: true } }, settingsPath);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.sandbox.enabled).toBe(true);
+		expect(after.sandbox.failIfUnavailable).toBe(true);
+		expect(after.sandbox.autoAllowBashIfSandboxed).toBe(true);
+		expect(after.sandbox.allowUnsandboxedCommands).toBe(false);
+		expect(after.sandbox.excludedCommands).toEqual(["docker", "kubectl"]);
+		expect(after.sandbox.network).toEqual({ allowedDomains: ["example.com"], allowLocalBinding: false });
+		expect(after.sandbox.filesystem).toEqual({ allowWrite: ["/tmp"], denyRead: ["/etc/shadow"] });
+	});
+
+	test("sandbox.network nested: setting allowedDomains preserves allowLocalBinding and ports", () => {
+		writeSettings({
+			sandbox: {
+				network: {
+					allowedDomains: ["example.com"],
+					allowLocalBinding: true,
+					httpProxyPort: 8080,
+					socksProxyPort: 1080,
+				},
+			},
+		});
+		const result = writeCurated(
+			{ sandbox: { network: { allowedDomains: ["example.com", "github.com"] } } },
+			settingsPath,
+		);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.sandbox.network.allowedDomains).toEqual(["example.com", "github.com"]);
+		expect(after.sandbox.network.allowLocalBinding).toBe(true);
+		expect(after.sandbox.network.httpProxyPort).toBe(8080);
+		expect(after.sandbox.network.socksProxyPort).toBe(1080);
+	});
+
+	test("sandbox.filesystem nested: setting allowWrite preserves denyWrite, denyRead, allowRead", () => {
+		writeSettings({
+			sandbox: {
+				filesystem: {
+					allowWrite: ["/tmp"],
+					denyWrite: ["/etc"],
+					denyRead: ["/etc/shadow"],
+					allowRead: ["/var/log"],
+				},
+			},
+		});
+		const result = writeCurated({ sandbox: { filesystem: { allowWrite: ["/tmp", "/var/tmp"] } } }, settingsPath);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.sandbox.filesystem.allowWrite).toEqual(["/tmp", "/var/tmp"]);
+		expect(after.sandbox.filesystem.denyWrite).toEqual(["/etc"]);
+		expect(after.sandbox.filesystem.denyRead).toEqual(["/etc/shadow"]);
+		expect(after.sandbox.filesystem.allowRead).toEqual(["/var/log"]);
+	});
+
+	test("sandbox.ripgrep nested: setting command preserves args", () => {
+		writeSettings({
+			sandbox: {
+				ripgrep: { command: "rg", args: ["--hidden", "--smart-case"] },
+			},
+		});
+		const result = writeCurated({ sandbox: { ripgrep: { command: "/usr/local/bin/rg" } } }, settingsPath);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.sandbox.ripgrep.command).toBe("/usr/local/bin/rg");
+		expect(after.sandbox.ripgrep.args).toEqual(["--hidden", "--smart-case"]);
+	});
+
+	test("env: setting one variable preserves every other env var", () => {
+		writeSettings({
+			env: {
+				PHANTOM_NAME: "phantom",
+				RESEND_API_KEY: "keep-me",
+				LINEAR_API_KEY: "keep-me-too",
+			},
+		});
+		const result = writeCurated({ env: { PHANTOM_NAME: "phantom-v2" } }, settingsPath);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.env.PHANTOM_NAME).toBe("phantom-v2");
+		expect(after.env.RESEND_API_KEY).toBe("keep-me");
+		expect(after.env.LINEAR_API_KEY).toBe("keep-me-too");
+	});
+
+	test("statusLine: setting padding alone preserves command and type", () => {
+		writeSettings({
+			statusLine: { type: "command", command: "echo ready", padding: 2 },
+		});
+		const result = writeCurated({ statusLine: { type: "command", command: "echo ready", padding: 4 } }, settingsPath);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.statusLine.command).toBe("echo ready");
+		expect(after.statusLine.padding).toBe(4);
+		expect(after.statusLine.type).toBe("command");
+	});
+
+	test("spinnerVerbs: setting verbs preserves mode", () => {
+		writeSettings({
+			spinnerVerbs: { mode: "append", verbs: ["pondering", "reticulating"] },
+		});
+		const result = writeCurated(
+			{ spinnerVerbs: { mode: "append", verbs: ["pondering", "reticulating", "vibing"] } },
+			settingsPath,
+		);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.spinnerVerbs.mode).toBe("append");
+		expect(after.spinnerVerbs.verbs).toEqual(["pondering", "reticulating", "vibing"]);
+	});
+
+	test("spinnerTipsOverride: setting tips preserves excludeDefault", () => {
+		writeSettings({
+			spinnerTipsOverride: { excludeDefault: true, tips: ["keep calm"] },
+		});
+		const result = writeCurated(
+			{ spinnerTipsOverride: { excludeDefault: true, tips: ["keep calm", "ship it"] } },
+			settingsPath,
+		);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.spinnerTipsOverride.excludeDefault).toBe(true);
+		expect(after.spinnerTipsOverride.tips).toEqual(["keep calm", "ship it"]);
+	});
+
+	test("no-op save (same content, different key order) does not mark the key dirty", () => {
+		// Canonical on-disk order.
 		writeSettings({
 			permissions: { allow: ["Bash(git:*)"], deny: ["Bash(rm:*)"], defaultMode: "default" },
 		});
+		// Client submits with different key insertion order; JSON.stringify
+		// output differs but the structures are equal.
 		const result = writeCurated(
-			{ permissions: { allow: ["Bash(git:*)"], deny: [], defaultMode: "default" } },
+			{ permissions: { defaultMode: "default", deny: ["Bash(rm:*)"], allow: ["Bash(git:*)"] } },
 			settingsPath,
 		);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
-		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
-		expect(after.permissions.deny).toEqual([]);
-		expect(after.permissions.allow).toEqual(["Bash(git:*)"]);
+		expect(result.dirty.length).toBe(0);
 	});
 });
 

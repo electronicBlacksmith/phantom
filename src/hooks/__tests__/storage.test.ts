@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installHook, listHooks, uninstallHook, updateHook } from "../storage.ts";
+import { installHook, listHooks, relocateHook, uninstallHook, updateHook } from "../storage.ts";
 
 let tmp: string;
 let settingsPath: string;
@@ -238,6 +238,196 @@ describe("uninstallHook", () => {
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.status).toBe(404);
+	});
+});
+
+describe("installHook: event/matcher compatibility enforcement", () => {
+	test("rejects a matcher on an event that does not accept one", () => {
+		writeSettings({});
+		const result = installHook(
+			{
+				event: "Notification",
+				matcher: "Bash",
+				definition: { type: "command", command: "echo notify" },
+			},
+			settingsPath,
+		);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.status).toBe(422);
+	});
+
+	test("rejects a matcher on UserPromptSubmit", () => {
+		writeSettings({});
+		const result = installHook(
+			{
+				event: "UserPromptSubmit",
+				matcher: "foo",
+				definition: { type: "command", command: "echo" },
+			},
+			settingsPath,
+		);
+		expect(result.ok).toBe(false);
+	});
+
+	test("rejects a matcher on SessionStart", () => {
+		writeSettings({});
+		const result = installHook(
+			{
+				event: "SessionStart",
+				matcher: "foo",
+				definition: { type: "command", command: "echo" },
+			},
+			settingsPath,
+		);
+		expect(result.ok).toBe(false);
+	});
+
+	test("accepts no matcher on a matcher-unsupported event", () => {
+		writeSettings({});
+		const result = installHook(
+			{
+				event: "Notification",
+				definition: { type: "command", command: "echo notify" },
+			},
+			settingsPath,
+		);
+		expect(result.ok).toBe(true);
+	});
+
+	test("accepts a matcher on a matcher-supported event", () => {
+		writeSettings({});
+		const result = installHook(
+			{
+				event: "PreToolUse",
+				matcher: "Bash",
+				definition: { type: "command", command: "echo pre" },
+			},
+			settingsPath,
+		);
+		expect(result.ok).toBe(true);
+	});
+});
+
+describe("relocateHook", () => {
+	test("moves a hook between event/matcher coordinates atomically", () => {
+		writeSettings({
+			hooks: {
+				PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "run" }] }],
+			},
+		});
+		const result = relocateHook(
+			{
+				fromEvent: "PreToolUse",
+				fromGroupIndex: 0,
+				fromHookIndex: 0,
+				toEvent: "PostToolUse",
+				toMatcher: "Write",
+				definition: { type: "command", command: "run" },
+			},
+			settingsPath,
+		);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.slice.PreToolUse).toBeUndefined();
+		expect(result.slice.PostToolUse?.[0].matcher).toBe("Write");
+		expect(result.slice.PostToolUse?.[0].hooks.length).toBe(1);
+	});
+
+	test("appends to an existing matcher group on the destination event", () => {
+		writeSettings({
+			hooks: {
+				PreToolUse: [
+					{ matcher: "Bash", hooks: [{ type: "command", command: "bash-hook" }] },
+					{ matcher: "Write", hooks: [{ type: "command", command: "write-hook" }] },
+				],
+			},
+		});
+		const result = relocateHook(
+			{
+				fromEvent: "PreToolUse",
+				fromGroupIndex: 0,
+				fromHookIndex: 0,
+				toEvent: "PreToolUse",
+				toMatcher: "Write",
+				definition: { type: "command", command: "bash-hook" },
+			},
+			settingsPath,
+		);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		// Now PreToolUse has a single group (Write) with 2 hooks.
+		expect(result.slice.PreToolUse?.length).toBe(1);
+		expect(result.slice.PreToolUse?.[0].hooks.length).toBe(2);
+	});
+
+	test("refuses a relocate that would put a matcher on a matcher-unsupporting event", () => {
+		writeSettings({
+			hooks: {
+				PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "run" }] }],
+			},
+		});
+		const result = relocateHook(
+			{
+				fromEvent: "PreToolUse",
+				fromGroupIndex: 0,
+				fromHookIndex: 0,
+				toEvent: "Notification",
+				toMatcher: "Bash",
+				definition: { type: "command", command: "run" },
+			},
+			settingsPath,
+		);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.status).toBe(422);
+	});
+
+	test("returns 404 when the source coordinate is out of range", () => {
+		writeSettings({
+			hooks: {
+				PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "run" }] }],
+			},
+		});
+		const result = relocateHook(
+			{
+				fromEvent: "PreToolUse",
+				fromGroupIndex: 5,
+				fromHookIndex: 0,
+				toEvent: "PostToolUse",
+				toMatcher: undefined,
+				definition: { type: "command", command: "run" },
+			},
+			settingsPath,
+		);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.status).toBe(404);
+	});
+
+	test("preserves enabledPlugins and other non-hook settings", () => {
+		writeSettings({
+			enabledPlugins: { "linear@claude-plugins-official": true },
+			model: "claude-opus-4-6",
+			hooks: {
+				PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "run" }] }],
+			},
+		});
+		const result = relocateHook(
+			{
+				fromEvent: "PreToolUse",
+				fromGroupIndex: 0,
+				fromHookIndex: 0,
+				toEvent: "PostToolUse",
+				toMatcher: undefined,
+				definition: { type: "command", command: "run" },
+			},
+			settingsPath,
+		);
+		expect(result.ok).toBe(true);
+		const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(after.enabledPlugins).toEqual({ "linear@claude-plugins-official": true });
+		expect(after.model).toBe("claude-opus-4-6");
 	});
 });
 

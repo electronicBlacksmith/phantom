@@ -230,7 +230,7 @@ export class AgentRuntime {
 							// plugin cards optimistically flipped to "installing..." can settle
 							// to "installed". The helper is wrapped so a telemetry failure never
 							// propagates into the agent main loop.
-							emitPluginInitSnapshot(message as unknown as Parameters<typeof emitPluginInitSnapshot>[0]);
+							emitPluginInitSnapshot(message);
 						}
 						break;
 					}

@@ -6,7 +6,7 @@
 // protects against torn files on a mid-write crash.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
 	MAX_BODY_BYTES,
 	type ParseResult,
@@ -169,7 +169,7 @@ export type WriteInput = {
 function writeAtomic(file: string, content: string): void {
 	const dir = dirname(file);
 	ensureDir(dir);
-	const base = file.split("/").pop() ?? "subagent.md";
+	const base = basename(file);
 	const tmp = join(dir, `.${base}.tmp-${process.pid}-${Date.now()}`);
 	writeFileSync(tmp, content, { encoding: "utf-8", mode: 0o644 });
 	renameSync(tmp, file);

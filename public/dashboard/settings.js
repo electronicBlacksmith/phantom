@@ -20,8 +20,9 @@
 				{ key: "permissions.allow", label: "Allow rules", kind: "chips", help: "Permission rules granting tool access. Example: Bash(git:*), WebFetch(domain:github.com)." },
 				{ key: "permissions.deny", label: "Deny rules", kind: "chips", help: "Permission rules blocking tool access. Checked before allow." },
 				{ key: "permissions.ask", label: "Ask rules", kind: "chips", help: "Permission rules that always prompt for confirmation." },
-				{ key: "permissions.defaultMode", label: "Default mode", kind: "select", options: ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk"], help: "Default permission mode when Claude Code needs access. bypassPermissions grants the agent unrestricted access.", warning: true },
+				{ key: "permissions.defaultMode", label: "Default mode", kind: "select", options: ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk"], help: "Default permission mode when Claude Code needs access. bypassPermissions grants the agent unrestricted access. dontAsk denies anything not pre-approved.", warning: true },
 				{ key: "permissions.additionalDirectories", label: "Additional directories", kind: "chips", help: "Extra project directories the agent can read and write outside the main cwd." },
+				{ key: "permissions.disableBypassPermissionsMode", label: "Lock out bypassPermissions", kind: "lockToggle", help: "Lock the agent out of permissionMode: bypassPermissions. Once set, cannot be unset via the dashboard without editing settings.json directly.", warning: true },
 			],
 		},
 		{
@@ -104,6 +105,12 @@
 		whitelist: [],
 		denylist: [],
 		draft: {},
+		// A parallel set of dot-separated paths the user has actively
+		// interacted with in this session. We track touched state so that
+		// "user cleared a field to empty" is distinguishable from "user has
+		// not touched this field yet", without collapsing empty arrays and
+		// empty strings into the same absent-key bucket.
+		touched: {},
 		loading: true,
 		initialized: false,
 	};
@@ -122,6 +129,10 @@
 		return cur;
 	}
 
+	// Writes the draft at `path` as an explicit value, even when empty. We
+	// store empty strings and empty arrays so the dirty comparator can see
+	// "user cleared this" versus "user never touched this". setNested also
+	// flips the touched bit for this path.
 	function setNested(obj, path, value) {
 		var parts = path.split(".");
 		var cur = obj;
@@ -129,40 +140,66 @@
 			if (cur[parts[i]] == null || typeof cur[parts[i]] !== "object") cur[parts[i]] = {};
 			cur = cur[parts[i]];
 		}
-		if (value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) {
-			delete cur[parts[parts.length - 1]];
-		} else {
-			cur[parts[parts.length - 1]] = value;
-		}
+		cur[parts[parts.length - 1]] = value;
+		state.touched[path] = true;
 	}
 
 	function draftValue(path) {
+		// Touched paths may legitimately hold "" or []; return the stored
+		// empty state. Untouched paths fall back to the on-disk value.
+		if (state.touched[path]) {
+			return getNested(state.draft, path);
+		}
 		var v = getNested(state.draft, path);
 		if (v !== undefined) return v;
 		return getNested(state.current, path);
 	}
 
+	// Structural deep equality. Mirrors the server-side comparator so the
+	// dirty badge stays in sync with the server's dirty detection on save.
+	function deepEqual(a, b) {
+		if (a === b) return true;
+		if (a == null || b == null) return a === b;
+		if (typeof a !== typeof b) return false;
+		if (Array.isArray(a) || Array.isArray(b)) {
+			if (!Array.isArray(a) || !Array.isArray(b)) return false;
+			if (a.length !== b.length) return false;
+			for (var i = 0; i < a.length; i++) {
+				if (!deepEqual(a[i], b[i])) return false;
+			}
+			return true;
+		}
+		if (typeof a === "object") {
+			var ak = Object.keys(a);
+			var bk = Object.keys(b);
+			if (ak.length !== bk.length) return false;
+			for (var j = 0; j < ak.length; j++) {
+				var k = ak[j];
+				if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+				if (!deepEqual(a[k], b[k])) return false;
+			}
+			return true;
+		}
+		return false;
+	}
+
 	function isDirty() {
-		if (!state.draft || Object.keys(state.draft).length === 0) return false;
 		return dirtyKeys().length > 0;
 	}
 
+	// Returns the list of top-level dirty keys in the draft. A key is
+	// dirty if any touched path under it differs structurally from the
+	// on-disk value.
 	function dirtyKeys() {
 		var topLevelTouched = {};
-		SECTIONS.forEach(function (sec) {
-			sec.fields.forEach(function (f) {
-				if (!f.key) return;
-				var top = f.key.split(".")[0];
-				if (getNested(state.draft, top) !== undefined) {
-					topLevelTouched[top] = true;
-				}
-			});
+		Object.keys(state.touched).forEach(function (path) {
+			topLevelTouched[path.split(".")[0]] = true;
 		});
 		var dirty = [];
 		Object.keys(topLevelTouched).forEach(function (k) {
 			var draftV = state.draft[k];
 			var currentV = state.current[k];
-			if (JSON.stringify(draftV) !== JSON.stringify(currentV)) dirty.push(k);
+			if (!deepEqual(draftV, currentV)) dirty.push(k);
 		});
 		return dirty;
 	}
@@ -205,6 +242,19 @@
 				'<input type="checkbox" data-setting-path="' + esc(f.key) + '" ' + (v === true ? 'checked' : '') + '>' +
 				'<span class="dash-toggle-track"></span>' +
 				'<span>' + (v === true ? 'on' : 'off') + '</span>' +
+				'</label>'
+			);
+		} else if (f.kind === "lockToggle") {
+			// One-way lock: the persisted value is the literal string
+			// "disable"; the field cannot be unset through the dashboard
+			// once set. Reflect that in the UI by disabling the control
+			// once the on-disk value is "disable".
+			var locked = v === "disable";
+			control = (
+				'<label class="dash-toggle">' +
+				'<input type="checkbox" data-setting-lock="' + esc(f.key) + '" ' + (locked ? 'checked disabled' : '') + '>' +
+				'<span class="dash-toggle-track"></span>' +
+				'<span>' + (locked ? 'locked' : 'unlocked') + '</span>' +
 				'</label>'
 			);
 		} else if (f.kind === "select") {
@@ -278,6 +328,7 @@
 		var revertBtn = document.getElementById("settings-revert-btn");
 		if (revertBtn) revertBtn.addEventListener("click", function () {
 			state.draft = {};
+			state.touched = {};
 			render();
 		});
 		ctx.setBreadcrumb("Settings");
@@ -290,7 +341,10 @@
 				el.addEventListener("change", function () { setNested(state.draft, path, el.checked); render(); });
 			} else if (el.tagName === "SELECT") {
 				el.addEventListener("change", function () {
-					setNested(state.draft, path, el.value || undefined);
+					// Empty option means "unset this field"; map to
+					// undefined which the server-side whitelist
+					// schema treats as "not submitted".
+					setNested(state.draft, path, el.value === "" ? undefined : el.value);
 					render();
 				});
 			} else if (el.type === "number") {
@@ -304,10 +358,26 @@
 				el.addEventListener("blur", render);
 			} else {
 				el.addEventListener("input", function () {
-					setNested(state.draft, path, el.value.trim() || undefined);
+					// Persist the raw trimmed value, including the empty
+					// string. The parallel touched set keeps dirty
+					// detection working for "I just cleared this".
+					setNested(state.draft, path, el.value.trim());
 				});
 				el.addEventListener("blur", render);
 			}
+		});
+		document.querySelectorAll("[data-setting-lock]").forEach(function (el) {
+			// One-way lock: once the operator enables it, we persist the
+			// literal string "disable" and the control is disabled on
+			// re-render. There is no "turn it back off" path from the UI.
+			var path = el.getAttribute("data-setting-lock");
+			el.addEventListener("change", function () {
+				if (!el.checked) return;
+				var go = window.confirm("This lock cannot be undone from the dashboard. Continue?");
+				if (!go) { el.checked = false; return; }
+				setNested(state.draft, path, "disable");
+				render();
+			});
 		});
 		document.querySelectorAll("[data-chip-input-for]").forEach(function (input) {
 			var path = input.getAttribute("data-chip-input-for");
@@ -330,6 +400,9 @@
 			btn.addEventListener("click", function () {
 				var arr = (draftValue(path) || []).slice();
 				arr.splice(idx, 1);
+				// Persist the emptied array explicitly via setNested so
+				// the user can save "I cleared the last chip" as an
+				// empty array rather than reverting to on-disk.
 				setNested(state.draft, path, arr);
 				render();
 			});
@@ -346,6 +419,7 @@
 		ctx.api("PUT", "/ui/api/settings", payload).then(function (res) {
 			state.current = res.current || state.current;
 			state.draft = {};
+			state.touched = {};
 			ctx.toast("success", "Settings saved", "The agent picks this up on its next message.");
 			render();
 		}).catch(function (err) {
@@ -362,6 +436,7 @@
 			state.whitelist = res.whitelist || [];
 			state.denylist = res.denylist || [];
 			state.draft = {};
+			state.touched = {};
 			state.loading = false;
 			render();
 		}).catch(function (err) {

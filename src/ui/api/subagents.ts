@@ -161,6 +161,8 @@ export async function handleSubagentsApi(req: Request, url: URL, deps: Subagents
 				action: "create",
 				previousBody: null,
 				newBody: result.subagent.body,
+				previousFrontmatterJson: null,
+				newFrontmatterJson: JSON.stringify(result.subagent.frontmatter),
 				actor: "user",
 			});
 		}
@@ -206,6 +208,13 @@ export async function handleSubagentsApi(req: Request, url: URL, deps: Subagents
 					{ status: 413 },
 				);
 			}
+			// Capture the previous frontmatter before writing so we can
+			// record a diff in the audit log. The subagent storage layer
+			// returns previousBody but not previousFrontmatter; read it
+			// inline here via readSubagent so we do not widen the storage
+			// return shape.
+			const preRead = readSubagent(name);
+			const previousFrontmatterJson = preRead.ok ? JSON.stringify(preRead.subagent.frontmatter) : null;
 			const result = writeSubagent({ name, frontmatter: parsed.frontmatter, body: parsed.body }, { mustExist: true });
 			if (result.ok) {
 				recordSubagentEdit(deps.db, {
@@ -213,6 +222,8 @@ export async function handleSubagentsApi(req: Request, url: URL, deps: Subagents
 					action: "update",
 					previousBody: result.previousBody,
 					newBody: result.subagent.body,
+					previousFrontmatterJson,
+					newFrontmatterJson: JSON.stringify(result.subagent.frontmatter),
 					actor: "user",
 				});
 			}
@@ -220,6 +231,11 @@ export async function handleSubagentsApi(req: Request, url: URL, deps: Subagents
 		}
 
 		if (req.method === "DELETE") {
+			// Snapshot the frontmatter before the file is removed so the
+			// audit row can render "this is what the subagent looked like
+			// before the delete".
+			const preRead = readSubagent(name);
+			const previousFrontmatterJson = preRead.ok ? JSON.stringify(preRead.subagent.frontmatter) : null;
 			const result = deleteSubagent(name);
 			if (result.ok) {
 				recordSubagentEdit(deps.db, {
@@ -227,6 +243,8 @@ export async function handleSubagentsApi(req: Request, url: URL, deps: Subagents
 					action: "delete",
 					previousBody: result.previousBody,
 					newBody: null,
+					previousFrontmatterJson,
+					newFrontmatterJson: null,
 					actor: "user",
 				});
 			}
