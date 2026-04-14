@@ -1,5 +1,6 @@
 ---
 name: show-my-tools
+x-phantom-source: built-in
 description: List the agent's current skills, memory files, and dashboard URLs. The user-facing discovery path for everything the operator can edit.
 when_to_use: Use when the user says "what can you do", "what skills do you have", "show me your skills", "what can I edit", "how do I customize you", "what memory files do you have", "what is in your .claude", "where is the dashboard", or any similar discovery question.
 allowed-tools:

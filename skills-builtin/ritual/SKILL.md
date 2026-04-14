@@ -1,5 +1,6 @@
 ---
 name: ritual
+x-phantom-source: built-in
 description: Discover recurring behaviors from memory and offer to formalize them as scheduled jobs.
 when_to_use: Use when the user says "ritual", "what are my patterns", "turn this into a routine", "make this recurring", "what do I do regularly", "what should I schedule", "automate this for me", or any similar pattern-formalization phrase. Also fires on a monthly cadence if enabled.
 allowed-tools:

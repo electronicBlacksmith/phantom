@@ -41,6 +41,19 @@ describe("listSkills", () => {
 		const result = listSkills();
 		expect(result.skills.length).toBe(1);
 		expect(result.skills[0].name).toBe("mirror");
+		expect(result.skills[0].source).toBe("user");
+	});
+
+	test("classifies a skill with x-phantom-source: built-in as built-in", () => {
+		const skillDir = join(tmp, "mirror");
+		mkdirSync(skillDir);
+		writeFileSync(
+			join(skillDir, "SKILL.md"),
+			"---\nname: mirror\nx-phantom-source: built-in\ndescription: weekly\nwhen_to_use: Use on Friday.\n---\n\n# Mirror\n",
+		);
+		const result = listSkills();
+		expect(result.skills.length).toBe(1);
+		expect(result.skills[0].source).toBe("built-in");
 	});
 
 	test("skips directories with bad names", () => {

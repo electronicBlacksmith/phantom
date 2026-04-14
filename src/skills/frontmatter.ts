@@ -32,6 +32,7 @@ export const SKILL_NAME_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 export const MAX_BODY_BYTES = 50 * 1024; // 50 KB
 
 export const SkillContextSchema = z.enum(["inline", "fork"]);
+export const SkillSourceSchema = z.enum(["built-in", "agent", "user"]);
 
 export const SkillFrontmatterSchema = z
 	.object({
@@ -46,6 +47,11 @@ export const SkillFrontmatterSchema = z
 		arguments: z.array(z.string().min(1)).optional(),
 		context: SkillContextSchema.optional(),
 		"disable-model-invocation": z.boolean().optional(),
+		// Provenance marker. Omitted on user-authored skills (default treats
+		// missing as "user"). Built-in skills shipped under skills-builtin/ set
+		// this to "built-in" so the dashboard can group and badge them.
+		// detectSource() in src/skills/storage.ts reads this field.
+		"x-phantom-source": SkillSourceSchema.optional(),
 	})
 	.strict();
 

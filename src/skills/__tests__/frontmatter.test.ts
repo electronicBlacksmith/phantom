@@ -63,6 +63,55 @@ describe("parseFrontmatter", () => {
 		const result = parseFrontmatter(raw);
 		expect(result.ok).toBe(false);
 	});
+
+	test("accepts x-phantom-source marker for built-in skills", () => {
+		const raw = `---
+name: mirror
+x-phantom-source: built-in
+description: weekly self-audit
+when_to_use: Use on Friday evening.
+---
+
+# Mirror
+body
+`;
+		const result = parseFrontmatter(raw);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.parsed.frontmatter["x-phantom-source"]).toBe("built-in");
+	});
+
+	test("accepts x-phantom-source marker for agent-authored skills", () => {
+		const raw = `---
+name: mirror
+x-phantom-source: agent
+description: weekly self-audit
+when_to_use: Use on Friday evening.
+---
+
+# Mirror
+body
+`;
+		const result = parseFrontmatter(raw);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.parsed.frontmatter["x-phantom-source"]).toBe("agent");
+	});
+
+	test("rejects invalid x-phantom-source values", () => {
+		const raw = `---
+name: mirror
+x-phantom-source: bogus
+description: weekly self-audit
+when_to_use: Use on Friday evening.
+---
+
+# Mirror
+body
+`;
+		const result = parseFrontmatter(raw);
+		expect(result.ok).toBe(false);
+	});
 });
 
 describe("serializeSkill", () => {

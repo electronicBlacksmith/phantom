@@ -1,5 +1,6 @@
 ---
 name: mirror
+x-phantom-source: built-in
 description: Weekly self-audit playback. Surface patterns from the user's past week that they probably cannot see themselves.
 when_to_use: Use when the user says "mirror", "weekly review", "show me my week", "what did I actually do this week", "reflect on last week", "how did my week go", or any similar reflective request. Also fires automatically on a Friday evening schedule if the user has enabled the mirror ritual.
 allowed-tools:

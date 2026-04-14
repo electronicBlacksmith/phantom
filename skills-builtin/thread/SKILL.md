@@ -1,5 +1,6 @@
 ---
 name: thread
+x-phantom-source: built-in
 description: Show how the user's thinking on a specific topic has evolved over time. A chronological narrative with turning-point callouts.
 when_to_use: Use when the user says "thread <topic>", "how has my thinking on X evolved", "show me the arc on X", "what have I said about X", "take me through X from the start", "where am I with X", or when the user needs to re-ground in a long-running decision.
 allowed-tools:

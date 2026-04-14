@@ -1,5 +1,6 @@
 ---
 name: overheard
+x-phantom-source: built-in
 description: Find commitments the user made in the last two weeks and did not follow through on. A promises audit.
 when_to_use: Use when the user says "overheard", "what did I promise", "what am I behind on", "promises audit", "am I dropping balls", "what did I commit to", "what do I owe people", or any similar commitment-check phrase. Also runs automatically once per day at a user-configured time if enabled.
 allowed-tools:

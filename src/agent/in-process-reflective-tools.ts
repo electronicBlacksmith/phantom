@@ -86,7 +86,9 @@ Each episode includes summary, detail, outcome, started_at, tools_used, and less
 					results.episodes = await memory.recallEpisodes(input.query, opts).catch(() => []);
 				}
 				if (input.memory_type === "semantic" || input.memory_type === "all") {
-					results.facts = await memory.recallFacts(input.query, { limit }).catch(() => []);
+					// Same opts so days_back also bounds semantic facts; otherwise a
+					// weekly mirror leaks 6-month-old preferences into the result.
+					results.facts = await memory.recallFacts(input.query, opts).catch(() => []);
 				}
 
 				const total = Object.values(results).reduce((sum, arr) => sum + arr.length, 0);

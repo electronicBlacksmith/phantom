@@ -1,5 +1,6 @@
 ---
 name: echo
+x-phantom-source: built-in
 description: Before answering a substantive question, quietly check whether the user has already resolved this question in the past.
 when_to_use: Use when the user asks a substantive question that might have been asked and resolved before. Substantive questions are things like "how should I do X", "what is the right way to Y", "which approach is better", "what did we decide about Z". Do NOT fire on greetings, small talk, status checks, or operational queries like "what time is it" or "are you online". Before deriving a new answer, run a memory similarity check. If a strong prior match exists, surface it inline and ask whether anything has changed.
 allowed-tools:
