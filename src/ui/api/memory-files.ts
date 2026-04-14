@@ -56,6 +56,8 @@ function detailJson(file: MemoryFileDetail): Record<string, unknown> {
 		mtime: file.mtime,
 		top_level: file.top_level,
 		content: file.content,
+		read_only: file.read_only === true,
+		description: file.description,
 	};
 }
 

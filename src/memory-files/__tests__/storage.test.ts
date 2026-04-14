@@ -6,15 +6,20 @@ import { isValidMemoryFilePath } from "../paths.ts";
 import { deleteMemoryFile, listMemoryFiles, readMemoryFile, writeMemoryFile } from "../storage.ts";
 
 let tmp: string;
+let phantomConfigTmp: string;
 
 beforeEach(() => {
 	tmp = mkdtempSync(join(tmpdir(), "phantom-memfiles-"));
+	phantomConfigTmp = mkdtempSync(join(tmpdir(), "phantom-config-memory-storage-"));
 	process.env.PHANTOM_MEMORY_FILES_ROOT = tmp;
+	process.env.PHANTOM_CONFIG_MEMORY_ROOT = phantomConfigTmp;
 });
 
 afterEach(() => {
 	rmSync(tmp, { recursive: true, force: true });
+	rmSync(phantomConfigTmp, { recursive: true, force: true });
 	Reflect.deleteProperty(process.env, "PHANTOM_MEMORY_FILES_ROOT");
+	Reflect.deleteProperty(process.env, "PHANTOM_CONFIG_MEMORY_ROOT");
 });
 
 describe("isValidMemoryFilePath", () => {

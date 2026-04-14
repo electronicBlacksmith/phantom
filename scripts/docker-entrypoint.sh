@@ -9,6 +9,20 @@ if [ ! -f /app/phantom-config/constitution.md ]; then
   cp -r /app/phantom-config-defaults/* /app/phantom-config/ 2>/dev/null || true
 fi
 
+# Seed the agent-notes baseline on every start, not just first run. On existing
+# VMs the phantom_evolved named volume was populated before the Phase 0 Part B
+# change added this file, so the bootstrap skip above fires and the new file
+# never lands in the live path. This block runs unconditionally: if the target
+# is missing, copy the committed baseline from the image and hand ownership to
+# the phantom user so the agent can append to it.
+if [ ! -f /app/phantom-config/memory/agent-notes.md ] \
+  && [ -f /app/phantom-config-defaults/memory/agent-notes.md ]; then
+  mkdir -p /app/phantom-config/memory
+  cp /app/phantom-config-defaults/memory/agent-notes.md /app/phantom-config/memory/agent-notes.md
+  chown -R 999:999 /app/phantom-config/memory 2>/dev/null || true
+  echo "[phantom] Seeded agent-notes.md baseline"
+fi
+
 # Seed built-in skills into the user-scope .claude/skills volume on first run.
 # Existing skills (user edits) are preserved: we only copy directories that are
 # missing. The source lives at /app/skills-builtin/ and is a pristine copy from

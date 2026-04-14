@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod/v4";
-import { parseJsonFromResponse } from "../judge-query.ts";
+import { __absorbUsageForTest, parseJsonFromResponse } from "../judge-query.ts";
 
 // parseJsonFromResponse is the shape-normalization layer for judge subprocess output.
 // Models sometimes return markdown fences, leading prose, or trailing whitespace even
@@ -79,6 +79,42 @@ describe("parseJsonFromResponse", () => {
 	test("error message includes truncated response for debugging", () => {
 		const text = "not json at all, just prose with no object";
 		expect(() => parseJsonFromResponse(text, Schema)).toThrow(/not json/i);
+	});
+
+	test("absorbUsage accumulates tokens from assistant BetaMessage envelope", () => {
+		// The SDK's assistant message carries usage nested under `message.usage`.
+		const messages = [{ type: "assistant", message: { usage: { input_tokens: 1200, output_tokens: 340 } } }];
+		const partial = __absorbUsageForTest(messages);
+		expect(partial.inputTokens).toBe(1200);
+		expect(partial.outputTokens).toBe(340);
+	});
+
+	test("absorbUsage accumulates tokens from a top-level usage-bearing message", () => {
+		// Some SDK message subtypes (system, task_*) surface usage on the top-
+		// level object rather than on a nested `message` field.
+		const messages = [
+			{ type: "system_init", usage: { input_tokens: 75, output_tokens: 0 } },
+			{ type: "task_progress", usage: { input_tokens: 50, output_tokens: 10 } },
+		];
+		const partial = __absorbUsageForTest(messages);
+		expect(partial.inputTokens).toBe(125);
+		expect(partial.outputTokens).toBe(10);
+	});
+
+	test("absorbUsage tolerates a missing result frame at the end of a stream", () => {
+		// This is the SIGKILL shape: an assistant message with usage followed
+		// by an abrupt end of stream. The partial cost keeps whatever tokens
+		// flowed through, and the upstream caller raises `JudgeSubprocessError`
+		// with these numbers attached.
+		const messages = [
+			{ type: "assistant", message: { usage: { input_tokens: 900, output_tokens: 0 } } },
+			{ type: "assistant", message: { usage: { input_tokens: 110, output_tokens: 22 } } },
+			// no { type: "result" } frame
+		];
+		const partial = __absorbUsageForTest(messages);
+		expect(partial.inputTokens).toBe(1010);
+		expect(partial.outputTokens).toBe(22);
+		expect(partial.costUsd).toBe(0);
 	});
 
 	test("parses nested structures", () => {

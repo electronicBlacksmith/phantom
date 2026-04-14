@@ -17,6 +17,7 @@
 
 	function isDirty() {
 		if (!state.currentFile) return false;
+		if (state.currentFile.read_only) return false;
 		var el = document.getElementById("memfile-body");
 		if (!el) return false;
 		return el.value !== state.lastLoadedContent;
@@ -28,10 +29,12 @@
 		return state.files.filter(function (f) { return f.path.toLowerCase().indexOf(q) >= 0; });
 	}
 
-	function specialDescription(topLevel, path) {
+	function specialDescription(topLevel, path, file) {
+		if (file && file.description) return file.description;
 		if (path === "CLAUDE.md") return "Your agent's top-level memory. Loaded at the start of every session.";
 		if (topLevel === "rules") return "Rule file. Applies conditionally if frontmatter defines paths.";
 		if (topLevel === "memory") return "Free-form memory note.";
+		if (topLevel === "phantom-config") return "Agent-maintained memory. Read-only in the dashboard.";
 		return "Markdown memory file.";
 	}
 
@@ -51,6 +54,7 @@
 	function renderListCard(file) {
 		var isSelected = state.selectedPath === file.path ? ' aria-current="page"' : "";
 		var label = file.path === "CLAUDE.md" ? "top-level" : file.top_level;
+		if (file.read_only) label = label + " (read-only)";
 		var sizeKb = file.size ? (file.size / 1024).toFixed(1) + " KB" : "";
 		return (
 			'<a href="#/memory-files/' + encodeURIComponent(file.path) + '" class="dash-list-card"' + isSelected + '>' +
@@ -58,7 +62,7 @@
 			'<h3 class="dash-list-card-title">' + esc(file.path) + '</h3>' +
 			'<span class="dash-source-chip dash-source-chip-user">' + esc(label) + '</span>' +
 			'</div>' +
-			'<p class="dash-list-card-desc">' + esc(specialDescription(file.top_level, file.path)) + '</p>' +
+			'<p class="dash-list-card-desc">' + esc(specialDescription(file.top_level, file.path, file)) + '</p>' +
 			'<div class="dash-list-card-meta"><span>' + sizeKb + '</span></div>' +
 			'</a>'
 		);
@@ -91,7 +95,7 @@
 			if (!byGroup[key]) byGroup[key] = [];
 			byGroup[key].push(f);
 		});
-		var order = ["top", "rules", "memory"];
+		var order = ["top", "rules", "memory", "phantom-config"];
 		Object.keys(byGroup).forEach(function (k) {
 			if (order.indexOf(k) < 0) order.push(k);
 		});
@@ -121,20 +125,35 @@
 			);
 		}
 		var f = state.currentFile;
-		var noteHtml = f.path === "CLAUDE.md"
-			? '<div class="dash-alert dash-alert-info" style="margin-bottom:var(--space-4);"><span>This is your agent\'s top-level memory. It loads at the start of every conversation.</span></div>'
-			: "";
+		var noteHtml = "";
+		if (f.path === "CLAUDE.md") {
+			noteHtml = '<div class="dash-alert dash-alert-info" style="margin-bottom:var(--space-4);"><span>This is your agent\'s top-level memory. It loads at the start of every conversation.</span></div>';
+		} else if (f.read_only) {
+			var readOnlyMsg = f.description
+				? f.description + '. Read-only in the dashboard: the agent manages this file directly.'
+				: 'Read-only in the dashboard: the agent manages this file directly.';
+			noteHtml = '<div class="dash-alert dash-alert-info" style="margin-bottom:var(--space-4);"><span>' + esc(readOnlyMsg) + '</span></div>';
+		}
+
+		var subtitlePath = f.read_only ? "phantom-config/memory/" + esc(f.path.replace("phantom-config/memory/", "")) : "/home/phantom/.claude/" + esc(f.path);
+		var actionsHtml = f.read_only
+			? ""
+			: '<button class="dash-btn dash-btn-ghost dash-btn-sm" id="memfile-delete-btn">Delete</button>' +
+			  '<button class="dash-btn dash-btn-primary dash-btn-sm" id="memfile-save-btn" disabled>Save</button>';
+		var textareaAttrs = f.read_only ? ' readonly' : '';
+		var hintText = f.read_only
+			? 'Markdown. ' + (f.size / 1024).toFixed(1) + ' KB. Read-only view.'
+			: 'Markdown. ' + (f.size / 1024).toFixed(1) + ' KB. Saved atomically.';
 
 		return (
 			'<section class="dash-editor" aria-labelledby="memfile-editor-title">' +
 			'<header class="dash-editor-header">' +
 			'<div class="dash-editor-title-wrap">' +
 			'<h2 class="dash-editor-title" id="memfile-editor-title">' + esc(f.path) + ' <span class="dash-dirty-dot" id="memfile-dirty-dot" data-dirty="false" aria-label="unsaved changes"></span></h2>' +
-			'<p class="dash-editor-subtitle">/home/phantom/.claude/' + esc(f.path) + '</p>' +
+			'<p class="dash-editor-subtitle">' + subtitlePath + '</p>' +
 			'</div>' +
 			'<div class="dash-editor-actions">' +
-			'<button class="dash-btn dash-btn-ghost dash-btn-sm" id="memfile-delete-btn">Delete</button>' +
-			'<button class="dash-btn dash-btn-primary dash-btn-sm" id="memfile-save-btn" disabled>Save</button>' +
+			actionsHtml +
 			'</div>' +
 			'</header>' +
 
@@ -143,8 +162,8 @@
 			'<div class="dash-form">' +
 			'<div class="dash-field">' +
 			'<label class="dash-field-label" for="memfile-body">Content</label>' +
-			'<textarea class="dash-textarea dash-textarea-tall" id="memfile-body" spellcheck="false">' + esc(f.content) + '</textarea>' +
-			'<div class="dash-field-hint">Markdown. ' + (f.size / 1024).toFixed(1) + ' KB. Saved atomically.</div>' +
+			'<textarea class="dash-textarea dash-textarea-tall" id="memfile-body" spellcheck="false"' + textareaAttrs + '>' + esc(f.content) + '</textarea>' +
+			'<div class="dash-field-hint">' + hintText + '</div>' +
 			'</div>' +
 			'</div>' +
 			'</section>'
@@ -280,6 +299,7 @@
 
 	function saveFile() {
 		if (!state.currentFile) return;
+		if (state.currentFile.read_only) return;
 		var body = document.getElementById("memfile-body").value;
 		var saveBtn = document.getElementById("memfile-save-btn");
 		if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving"; }
