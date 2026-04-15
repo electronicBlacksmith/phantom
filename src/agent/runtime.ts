@@ -14,6 +14,7 @@ import { type AgentCost, type AgentResponse, emptyCost } from "./events.ts";
 import { createDangerousCommandBlocker, createFileTracker } from "./hooks.ts";
 import { emitPluginInitSnapshot } from "./init-plugin-snapshot.ts";
 import { type JudgeQueryOptions, type JudgeQueryResult, runJudgeQuery } from "./judge-query.ts";
+import { extractTextFromMessageParam, wrapMessageContent } from "./message-param-utils.ts";
 import { extractCost, extractTextFromMessage } from "./message-utils.ts";
 import { assemblePrompt } from "./prompt-assembler.ts";
 import { SessionStore } from "./session-store.ts";
@@ -130,27 +131,9 @@ export class AgentRuntime {
 		}
 		this.activeSessions.add(sessionKey);
 
-		const contentBlocks = Array.isArray(message.content) ? message.content : [];
-		const textContent =
-			typeof message.content === "string"
-				? message.content
-				: contentBlocks
-						.filter(
-							(b): b is { type: "text"; text: string } =>
-								typeof b === "object" && b !== null && "type" in b && b.type === "text",
-						)
-						.map((b) => b.text)
-						.join("\n");
+		const textContent = extractTextFromMessageParam(message);
 		const wrappedText = this.wrapWithSecurityContext(textContent);
-		const wrappedMessage: MessageParam = {
-			...message,
-			content:
-				typeof message.content === "string"
-					? wrappedText
-					: contentBlocks.map((b) =>
-							typeof b === "object" && b !== null && "type" in b && b.type === "text" ? { ...b, text: wrappedText } : b,
-						),
-		};
+		const wrappedMessage = wrapMessageContent(message, wrappedText);
 
 		try {
 			return await executeChatQuery(
