@@ -3,6 +3,15 @@ import type { McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-
 import { z } from "zod";
 import type { DynamicToolRegistry } from "../mcp/dynamic-tools.ts";
 
+// Re-export GitHub exec functions for backwards compatibility
+export {
+	createGitHubToolServer,
+	executeGhExec,
+	redactTokensFromOutput,
+	validateGhExecArgs,
+	validateGhSubcommand,
+} from "./gh-exec.ts";
+
 /**
  * Creates an in-process SDK MCP server that exposes dynamic tool management
  * tools directly to the agent during conversations. This bridges the gap

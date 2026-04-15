@@ -3,6 +3,7 @@ import { z } from "zod/v4";
 import { buildProviderEnv } from "../config/providers.ts";
 import type { PhantomConfig } from "../config/types.ts";
 import { extractTextFromMessage } from "./message-utils.ts";
+import { buildAgentEnv } from "./subprocess-env.ts";
 
 // Judge subprocess integration. Routes LLM judge calls through the same
 // Agent SDK `query()` subprocess as the main agent so that auth, provider,
@@ -128,7 +129,7 @@ export async function runJudgeQuery<T>(
 			maxTurns: 1,
 			effort: "low",
 			persistSession: false,
-			env: { ...process.env, ...providerEnv },
+			env: buildAgentEnv(providerEnv),
 		},
 	});
 
