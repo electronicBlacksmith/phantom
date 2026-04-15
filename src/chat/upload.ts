@@ -114,6 +114,7 @@ async function processFiles(
 			const kind = mime.startsWith("image/") ? "image" : mime === "application/pdf" ? "pdf" : "text";
 
 			deps.attachmentStore.create({
+				id,
 				sessionId,
 				kind,
 				filename: sanitizeFilename(file.name),

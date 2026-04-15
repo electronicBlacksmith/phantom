@@ -207,10 +207,17 @@ export async function handleAttachmentPreview(attachmentId: string, deps: ChatHa
 
 	try {
 		const data = await readAttachmentFile(att.storage_path);
+		const sanitized = (att.filename ?? "file").replace(/["\n\r]/g, "_");
+		const isImage = att.mime_type?.startsWith("image/");
+		const disposition = isImage ? `inline; filename="${sanitized}"` : `attachment; filename="${sanitized}"`;
+
 		return new Response(new Uint8Array(data), {
 			headers: {
 				"Content-Type": att.mime_type ?? "application/octet-stream",
 				"Content-Length": String(data.byteLength),
+				"Content-Disposition": disposition,
+				"X-Content-Type-Options": "nosniff",
+				"Content-Security-Policy": "sandbox",
 				"Cache-Control": "private, max-age=3600",
 			},
 		});

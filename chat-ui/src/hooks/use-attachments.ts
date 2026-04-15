@@ -1,12 +1,17 @@
 // Shared attachment state and file acceptance logic.
 // Three triggers (paste, drop, click) all funnel into addFiles.
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 
 const IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const MAX_FILES = 10;
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
+function getMaxSizeForType(mimeType: string): { limit: number; label: string } {
+	if (mimeType === "application/pdf") return { limit: 32 * 1024 * 1024, label: "PDFs can be up to 32 MB" };
+	if (mimeType.startsWith("image/")) return { limit: 10 * 1024 * 1024, label: "Images can be up to 10 MB" };
+	return { limit: 1 * 1024 * 1024, label: "Text files can be up to 1 MB" };
+}
 
 export type PendingAttachment = {
 	id: string;
@@ -34,6 +39,8 @@ export function useAttachments(): {
 	isUploading: boolean;
 } {
 	const [files, setFiles] = useState<PendingAttachment[]>([]);
+	const filesRef = useRef(files);
+	filesRef.current = files;
 
 	const addFiles = useCallback(
 		(newFiles: File[]) => {
@@ -55,8 +62,9 @@ export function useAttachments(): {
 						toast.error("iOS HEIC photos are not supported. Please choose JPEG export from the Photos app.");
 						continue;
 					}
-					if (file.size > MAX_FILE_SIZE) {
-						toast.error(`"${file.name}" is too large. Max 10 MB.`);
+					const sizeInfo = getMaxSizeForType(file.type);
+					if (file.size > sizeInfo.limit) {
+						toast.error(`"${file.name}" is too large. ${sizeInfo.label}.`);
 						continue;
 					}
 
@@ -96,7 +104,7 @@ export function useAttachments(): {
 
 	const uploadFiles = useCallback(
 		async (sessionId: string): Promise<string[]> => {
-			const pending = files.filter((f) => f.status === "pending");
+			const pending = filesRef.current.filter((f) => f.status === "pending");
 			if (pending.length === 0) return [];
 
 			setFiles((prev) => prev.map((f) => (f.status === "pending" ? { ...f, status: "uploading" as const } : f)));
@@ -112,6 +120,21 @@ export function useAttachments(): {
 					credentials: "include",
 					body: formData,
 				});
+
+				if (!res.ok) {
+					let errorMsg = "Upload failed.";
+					try {
+						const errBody = (await res.json()) as { message?: string; error?: string };
+						errorMsg = errBody.message ?? errBody.error ?? errorMsg;
+					} catch {
+						// Could not parse error body
+					}
+					setFiles((prev) =>
+						prev.map((f) => (f.status === "uploading" ? { ...f, status: "error" as const } : f)),
+					);
+					toast.error(errorMsg);
+					return [];
+				}
 
 				const body = (await res.json()) as {
 					attachments?: AttachmentResult[];
@@ -139,7 +162,7 @@ export function useAttachments(): {
 				return [];
 			}
 		},
-		[files],
+		[],
 	);
 
 	return {

@@ -35,11 +35,12 @@ export function SessionRoute() {
   const sentCountRef = useRef(0);
 
   useEffect(() => {
+    clearFiles();
     const state = location.state as { initialMessage?: string } | null;
     if (sessionId && !state?.initialMessage) {
       loadSession(sessionId);
     }
-  }, [sessionId, loadSession, location.state]);
+  }, [sessionId, loadSession, location.state, clearFiles]);
 
   useEffect(() => {
     const state = location.state as { initialMessage?: string } | null;
@@ -54,16 +55,13 @@ export function SessionRoute() {
   const handleSend = useCallback(
     async (text: string) => {
       if (!sessionId) return;
-      let attachmentIds: string[] = [];
-      if (files.length > 0) {
-        attachmentIds = await uploadFiles(sessionId);
-        clearFiles();
-      }
+      const attachmentIds = await uploadFiles(sessionId);
+      if (attachmentIds.length > 0) clearFiles();
       sendMessage(text, attachmentIds.length > 0 ? attachmentIds : undefined);
       sentCountRef.current++;
       setHasSentMessage(true);
     },
-    [sessionId, files, uploadFiles, clearFiles, sendMessage],
+    [sessionId, uploadFiles, clearFiles, sendMessage],
   );
 
   return (
