@@ -14,6 +14,7 @@ export type ChatToolStateValue =
 export type ContentBlock = {
   type: string;
   text?: string;
+  blockId?: string;
   [key: string]: unknown;
 };
 

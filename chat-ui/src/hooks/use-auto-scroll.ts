@@ -44,13 +44,18 @@ export function useAutoScroll(): {
     el.addEventListener("scroll", handleScroll, { passive: true });
     observer.observe(el);
 
-    // Watch for child mutations to auto-scroll on new content
+    // Watch for direct child mutations to auto-scroll on new messages
+    let rafPending = false;
     const mutationObserver = new MutationObserver(() => {
-      if (!userScrolledRef.current) {
-        el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
+      if (!userScrolledRef.current && !rafPending) {
+        rafPending = true;
+        requestAnimationFrame(() => {
+          el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
+          rafPending = false;
+        });
       }
     });
-    mutationObserver.observe(el, { childList: true, subtree: true });
+    mutationObserver.observe(el, { childList: true });
 
     return () => {
       el.removeEventListener("scroll", handleScroll);

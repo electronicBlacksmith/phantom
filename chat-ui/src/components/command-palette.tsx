@@ -42,7 +42,8 @@ export function CommandPalette({
       } else if (value === "toggle-theme") {
         toggleTheme();
       } else if (value.startsWith("session:")) {
-        onSessionClick(value.slice(8));
+        const id = value.slice(8).split(":")[0] ?? "";
+        onSessionClick(id);
       }
     },
     [onNewSession, onSessionClick, toggleTheme],
@@ -72,7 +73,7 @@ export function CommandPalette({
             {sessions.slice(0, 10).map((session) => (
               <CommandItem
                 key={session.id}
-                value={`session:${session.id}`}
+                value={`session:${session.id}:${session.title ?? "Untitled"}`}
                 onSelect={handleSelect}
               >
                 <Search className="mr-2 h-4 w-4" />

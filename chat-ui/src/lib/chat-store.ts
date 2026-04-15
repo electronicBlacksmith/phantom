@@ -58,24 +58,22 @@ export function createChatStore(): ChatStore {
   };
 }
 
-function updateAssistantText(
+function updateTextBlockInContent(
   s: ChatState,
-  textBlocks: Map<string, { messageId: string; text: string }>,
+  blockId: string,
+  updater: (text: string) => string,
 ): ChatState {
   const msgs = [...s.messages];
   const last = msgs[msgs.length - 1];
   if (last && last.role === "assistant") {
-    const allText = Array.from(textBlocks.values())
-      .filter((b) => b.messageId === last.id)
-      .map((b) => b.text)
-      .join("");
-    const existingContent = last.content.filter((b) => b.type !== "text");
-    msgs[msgs.length - 1] = {
-      ...last,
-      content: [...existingContent, { type: "text", text: allText }],
-    };
+    const content = last.content.map((b) =>
+      b.type === "text" && b.blockId === blockId
+        ? { ...b, text: updater(b.text ?? "") }
+        : b,
+    );
+    msgs[msgs.length - 1] = { ...last, content };
   }
-  return { ...s, messages: msgs, textBlocks };
+  return { ...s, messages: msgs };
 }
 
 export function dispatchFrame(
@@ -125,40 +123,35 @@ export function dispatchFrame(
 
     case "message.text_start":
       store.update((s) => {
-        const blocks = new Map(s.textBlocks);
-        blocks.set(data.text_block_id as string, {
-          messageId: data.message_id as string,
-          text: "",
-        });
-        return { ...s, textBlocks: blocks };
+        const msgs = [...s.messages];
+        const last = msgs[msgs.length - 1];
+        if (last && last.role === "assistant") {
+          const blockId = data.text_block_id as string;
+          msgs[msgs.length - 1] = {
+            ...last,
+            content: [...last.content, { type: "text", blockId, text: "" }],
+          };
+        }
+        return { ...s, messages: msgs };
       });
       break;
 
     case "message.text_delta":
       store.update((s) => {
-        const blocks = new Map(s.textBlocks);
         const blockId = data.text_block_id as string;
-        const block = blocks.get(blockId);
-        if (block) {
-          blocks.set(blockId, {
-            ...block,
-            text: block.text + (data.delta as string),
-          });
-        }
-        return updateAssistantText(s, blocks);
+        const delta = data.delta as string;
+        return updateTextBlockInContent(s, blockId, (t) => t + delta);
       });
       break;
 
     case "message.text_end":
+      break;
+
     case "message.text_reconcile":
       store.update((s) => {
-        const blocks = new Map(s.textBlocks);
         const blockId = data.text_block_id as string;
-        if (event === "message.text_reconcile" && blocks.has(blockId)) {
-          const block = blocks.get(blockId)!;
-          blocks.set(blockId, { ...block, text: data.full_text as string });
-        }
-        return updateAssistantText(s, blocks);
+        const fullText = data.full_text as string;
+        return updateTextBlockInContent(s, blockId, () => fullText);
       });
       break;
 
@@ -242,7 +235,21 @@ export function dispatchFrame(
     case "session.done":
     case "session.error":
     case "session.aborted":
-      store.update((s) => ({ ...s, isStreaming: false }));
+      store.update((s) => {
+        const msgs = [...s.messages];
+        const last = msgs[msgs.length - 1];
+        if (last && last.role === "assistant" && last.status === "streaming") {
+          const newStatus = event === "session.error" ? "error" : "committed";
+          msgs[msgs.length - 1] = { ...last, status: newStatus };
+        }
+        return {
+          ...s,
+          messages: msgs,
+          isStreaming: false,
+          activeToolCalls: new Map(),
+          thinkingBlocks: new Map(),
+        };
+      });
       break;
 
     case "session.created":

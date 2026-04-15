@@ -8,7 +8,7 @@ import {
   Terminal,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { ToolCallState } from "@/lib/chat-types";
 
@@ -100,6 +100,12 @@ export function ToolCallCard({ tool }: { tool: ToolCallState }) {
   const autoExpand =
     tool.state === "error" || tool.state === "blocked";
   const [isOpen, setIsOpen] = useState(autoExpand);
+
+  useEffect(() => {
+    if (tool.state === "error" || tool.state === "blocked") {
+      setIsOpen(true);
+    }
+  }, [tool.state]);
 
   const hasBody =
     tool.output || tool.error || tool.blockReason || tool.inputJson;

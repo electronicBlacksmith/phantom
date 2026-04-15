@@ -10,6 +10,7 @@ export function SessionRoute() {
   const {
     messages,
     activeToolCalls,
+    thinkingBlocks,
     isStreaming,
     sendMessage,
     abort,
@@ -17,10 +18,11 @@ export function SessionRoute() {
   } = useChat(sessionId ?? null);
 
   useEffect(() => {
-    if (sessionId) {
+    const state = location.state as { initialMessage?: string } | null;
+    if (sessionId && !state?.initialMessage) {
       loadSession(sessionId);
     }
-  }, [sessionId, loadSession]);
+  }, [sessionId, loadSession, location.state]);
 
   // Handle initial message passed from the welcome state
   useEffect(() => {
@@ -39,14 +41,12 @@ export function SessionRoute() {
     [sendMessage],
   );
 
-  const emptyThinking = new Map<string, never>();
-
   return (
     <>
       <MessageList
         messages={messages}
         activeToolCalls={activeToolCalls}
-        thinkingBlocks={emptyThinking}
+        thinkingBlocks={thinkingBlocks}
       />
       <ChatInput
         onSend={handleSend}

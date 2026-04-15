@@ -1,11 +1,12 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import { abortSession, getSession, type SessionDetail } from "@/lib/client";
-import type { ChatMessage, ToolCallState } from "@/lib/chat-types";
+import type { ChatMessage, ThinkingBlockState, ToolCallState } from "@/lib/chat-types";
 import { createChatStore, dispatchFrame, type ChatStore } from "@/lib/chat-store";
 
 export function useChat(sessionId: string | null): {
   messages: ChatMessage[];
   activeToolCalls: Map<string, ToolCallState>;
+  thinkingBlocks: Map<string, ThinkingBlockState>;
   isStreaming: boolean;
   sendMessage: (text: string) => void;
   abort: () => void;
@@ -13,33 +14,38 @@ export function useChat(sessionId: string | null): {
 } {
   const storeRef = useRef<ChatStore>(createChatStore());
   const abortRef = useRef<AbortController | null>(null);
+  const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+  const generationRef = useRef(0);
   const store = storeRef.current;
 
   const state = useSyncExternalStore(store.subscribe, store.getState);
 
   const processSSEStream = useCallback(
-    async (body: ReadableStream<Uint8Array>) => {
+    async (body: ReadableStream<Uint8Array>, gen: number) => {
       const decoder = new TextDecoder();
       const reader = body.getReader();
+      readerRef.current = reader;
       let buffer = "";
+      let currentEvent = "";
+      let currentData = "";
 
       while (true) {
+        if (generationRef.current !== gen) return;
         const { done, value } = await reader.read();
         if (done) break;
+        if (generationRef.current !== gen) return;
         buffer += decoder.decode(value, { stream: true });
 
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
 
-        let currentEvent = "";
-        let currentData = "";
-
         for (const line of lines) {
           if (line.startsWith(":")) continue;
           if (line.startsWith("event: ")) {
             currentEvent = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            currentData = line.slice(6);
+          } else if (line.startsWith("data:")) {
+            const payload = line[5] === " " ? line.slice(6) : line.slice(5);
+            currentData += (currentData ? "\n" : "") + payload;
           } else if (line.startsWith("id: ")) {
             const seq = parseInt(line.slice(4), 10);
             if (!isNaN(seq)) {
@@ -49,6 +55,7 @@ export function useChat(sessionId: string | null): {
               }));
             }
           } else if (line === "" && currentEvent && currentData) {
+            if (generationRef.current !== gen) return;
             dispatchFrame(store, currentEvent, currentData);
             currentEvent = "";
             currentData = "";
@@ -56,7 +63,10 @@ export function useChat(sessionId: string | null): {
         }
       }
 
-      store.update((s) => ({ ...s, isStreaming: false }));
+      if (generationRef.current === gen) {
+        store.update((s) => ({ ...s, isStreaming: false }));
+      }
+      readerRef.current = null;
     },
     [store],
   );
@@ -65,7 +75,10 @@ export function useChat(sessionId: string | null): {
     (text: string) => {
       if (!sessionId) return;
 
+      readerRef.current?.cancel();
+      readerRef.current = null;
       abortRef.current?.abort();
+      const gen = ++generationRef.current;
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -83,20 +96,26 @@ export function useChat(sessionId: string | null): {
         signal: controller.signal,
       })
         .then((res) => {
+          if (generationRef.current !== gen) return;
           if (!res.ok || !res.body) {
             store.update((s) => ({ ...s, isStreaming: false }));
             return;
           }
-          return processSSEStream(res.body);
+          return processSSEStream(res.body, gen);
         })
         .catch(() => {
-          store.update((s) => ({ ...s, isStreaming: false }));
+          if (generationRef.current === gen) {
+            store.update((s) => ({ ...s, isStreaming: false }));
+          }
         });
     },
     [sessionId, store, processSSEStream],
   );
 
   const abort = useCallback(() => {
+    ++generationRef.current;
+    readerRef.current?.cancel();
+    readerRef.current = null;
     abortRef.current?.abort();
     if (sessionId) {
       abortSession(sessionId).catch(() => {});
@@ -109,6 +128,7 @@ export function useChat(sessionId: string | null): {
       store.reset(id);
       getSession(id)
         .then((detail: SessionDetail) => {
+          if (store.getState().sessionId !== id) return;
           const msgs = detail.messages.map(messageRowToChatMessage);
           store.update((s) => ({ ...s, messages: msgs, sessionId: id }));
         })
@@ -120,6 +140,7 @@ export function useChat(sessionId: string | null): {
   return {
     messages: state.messages,
     activeToolCalls: state.activeToolCalls,
+    thinkingBlocks: state.thinkingBlocks,
     isStreaming: state.isStreaming,
     sendMessage,
     abort,

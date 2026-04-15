@@ -1,11 +1,14 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { createSession } from "@/lib/client";
 
 export function NewChatRoute() {
   const navigate = useNavigate();
+  const didCreate = useRef(false);
 
   useEffect(() => {
+    if (didCreate.current) return;
+    didCreate.current = true;
     createSession()
       .then((result) => {
         navigate(`/s/${result.id}`, { replace: true });
