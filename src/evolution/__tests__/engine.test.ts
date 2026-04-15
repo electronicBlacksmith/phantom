@@ -201,17 +201,14 @@ describe("EvolutionEngine", () => {
 		const session = makeSession({ outcome: "success" });
 		await engine.afterSession(session);
 
-		// Phase 0 M4: `updateAfterSession` is called twice on the normal run
-		// path. Once at the top of `afterSession` so the mutex-skip path also
-		// updates counters (without that, dashboards undercount during bursts),
-		// and again inside `runCycle` with the real `hadCorrections` value.
-		// Both calls increment `session_count`, so the normal path double-counts
-		// by one. This is the tradeoff the Phase 0 reviewer explicitly accepted
-		// because Phase 2 replaces the drop-on-floor mutex with a real queue
-		// and removes this bookkeeping entirely.
+		// Phase 1+2 collapsed `updateAfterSession` to a single call inside
+		// `runCycle`, after observation extraction supplies the real
+		// `hadCorrections` value. The Phase 0 M4 increments at the top of
+		// `afterSessionInternal` and inside `enqueueIfWorthy` were obsolete
+		// once the persistent queue replaced the drop-on-floor mutex path.
 		const metrics = engine.getMetrics();
-		expect(metrics.session_count).toBe(2);
-		expect(metrics.success_count).toBe(2);
+		expect(metrics.session_count).toBe(1);
+		expect(metrics.success_count).toBe(1);
 	});
 
 	test("constitution violation is rejected", async () => {
@@ -249,6 +246,34 @@ describe("EvolutionEngine", () => {
 		expect(metrics.rollback_count).toBe(1);
 	});
 
+	test("rollback fires the runtime refresh callback with the rolled-back state", async () => {
+		// Codex finding on PR #63: the apply path refreshes the runtime via
+		// `notifyConfigApplied` but the auto-rollback branch was reverting disk
+		// state without firing the callback, leaving the runtime serving the
+		// rolled-forward snapshot. The fix wires the same callback into
+		// `rollback()` so any path that mutates disk state also refreshes the
+		// runtime. `getConfig()` re-reads from disk on every call, so the
+		// callback observes the post-rollback content.
+		const engine = new EvolutionEngine(CONFIG_PATH);
+		const refreshes: Array<{ version: number; userProfile: string }> = [];
+		engine.setOnConfigApplied(() => {
+			const config = engine.getConfig();
+			refreshes.push({ version: engine.getCurrentVersion(), userProfile: config.userProfile });
+		});
+
+		await engine.afterSession(makeSession({ user_messages: ["No, use TypeScript not JavaScript"] }));
+		expect(refreshes.length).toBe(1);
+		expect(refreshes[0].version).toBeGreaterThan(0);
+		expect(refreshes[0].userProfile).toContain("TypeScript");
+
+		engine.rollback(0);
+		// Two callback invocations now: one from the original apply, one from
+		// the rollback. The second sees the version-0 state on disk.
+		expect(refreshes.length).toBe(2);
+		expect(refreshes[1].version).toBe(0);
+		expect(refreshes[1].userProfile).not.toContain("TypeScript");
+	});
+
 	test("preference is detected and applied", async () => {
 		const engine = new EvolutionEngine(CONFIG_PATH);
 		const session = makeSession({
@@ -259,6 +284,46 @@ describe("EvolutionEngine", () => {
 		expect(result.changes_applied.length).toBeGreaterThan(0);
 		const userProfile = readFileSync(`${TEST_DIR}/phantom-config/user-profile.md`, "utf-8");
 		expect(userProfile.toLowerCase()).toContain("vim");
+	});
+
+	test("setOnConfigApplied fires after a successful afterSession that applies changes", async () => {
+		// C1 contract: the engine owns the runtime refresh callback and fires
+		// it from the apply path. Production wiring in src/index.ts uses this
+		// exact setter to refresh the runtime's evolvedConfig snapshot from
+		// disk. Test against the engine directly so a future refactor that
+		// breaks the callback shape fails here, not at boot time on a VM.
+		const engine = new EvolutionEngine(CONFIG_PATH);
+		const versions: number[] = [];
+		engine.setOnConfigApplied(() => {
+			versions.push(engine.getCurrentVersion());
+		});
+		await engine.afterSession(makeSession({ user_messages: ["No, use TypeScript not JavaScript"] }));
+		expect(versions.length).toBeGreaterThanOrEqual(1);
+		expect(versions.at(-1)).toBe(engine.getCurrentVersion());
+	});
+
+	test("setOnConfigApplied does not fire when no changes are applied", async () => {
+		const engine = new EvolutionEngine(CONFIG_PATH);
+		let calls = 0;
+		engine.setOnConfigApplied(() => {
+			calls += 1;
+		});
+		// A neutral session with no correction signals applies zero changes.
+		await engine.afterSession(makeSession({ user_messages: ["What time is it?"] }));
+		expect(calls).toBe(0);
+	});
+
+	test("setOnConfigApplied callback errors do not wedge the pipeline", async () => {
+		// A telemetry/refresh failure in the callback must not poison the
+		// evolution result. The engine swallows and warns, the pipeline
+		// returns normally, and the next applied change retries the refresh.
+		const engine = new EvolutionEngine(CONFIG_PATH);
+		engine.setOnConfigApplied(() => {
+			throw new Error("simulated runtime refresh failure");
+		});
+		const result = await engine.afterSession(makeSession({ user_messages: ["No, use TypeScript not JavaScript"] }));
+		expect(result.changes_applied.length).toBeGreaterThan(0);
+		expect(result.version).toBeGreaterThan(0);
 	});
 
 	test("evolved config is available in getConfig after changes", async () => {

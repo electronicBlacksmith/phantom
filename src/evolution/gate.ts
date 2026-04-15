@@ -95,6 +95,12 @@ export async function decideGate(session: SessionSummary, runtime: AgentRuntime 
 			schema: GateJudgeResult,
 			model: JUDGE_MODEL_HAIKU,
 			maxTokens: 200,
+			// The gate is a pure pass/skip evaluation. It never reads files,
+			// runs commands, or calls tools. Skipping the `claude_code` preset
+			// drops the per-call input token count from thousands to a few
+			// hundred, which is what the research cost target assumed and what
+			// observed fleet spend (20-180x target) exposed as broken.
+			omitPreset: true,
 		});
 		const evolve = result.data.evolve === true;
 		return {

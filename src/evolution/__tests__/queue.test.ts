@@ -67,9 +67,9 @@ describe("EvolutionQueue", () => {
 
 	test("drainAll returns rows oldest-first", () => {
 		const queue = new EvolutionQueue(db);
-		queue.enqueue(makeSummary({ session_id: "a" }), DECISION);
-		queue.enqueue(makeSummary({ session_id: "b" }), DECISION);
-		queue.enqueue(makeSummary({ session_id: "c" }), DECISION);
+		queue.enqueue(makeSummary({ session_id: "a", session_key: "slack:Ca:Ta" }), DECISION);
+		queue.enqueue(makeSummary({ session_id: "b", session_key: "slack:Cb:Tb" }), DECISION);
+		queue.enqueue(makeSummary({ session_id: "c", session_key: "slack:Cc:Tc" }), DECISION);
 		const drained = queue.drainAll();
 		expect(drained).toHaveLength(3);
 		expect(drained[0].session_id).toBe("a");
@@ -84,9 +84,9 @@ describe("EvolutionQueue", () => {
 
 	test("markProcessed deletes only the specified ids", () => {
 		const queue = new EvolutionQueue(db);
-		queue.enqueue(makeSummary({ session_id: "a" }), DECISION);
-		queue.enqueue(makeSummary({ session_id: "b" }), DECISION);
-		queue.enqueue(makeSummary({ session_id: "c" }), DECISION);
+		queue.enqueue(makeSummary({ session_id: "a", session_key: "slack:Ca:Ta" }), DECISION);
+		queue.enqueue(makeSummary({ session_id: "b", session_key: "slack:Cb:Tb" }), DECISION);
+		queue.enqueue(makeSummary({ session_id: "c", session_key: "slack:Cc:Tc" }), DECISION);
 		const drained = queue.drainAll();
 		queue.markProcessed([drained[0].id, drained[2].id]);
 		const remaining = queue.drainAll();
@@ -128,6 +128,50 @@ describe("EvolutionQueue", () => {
 				// best-effort cleanup
 			}
 		}
+	});
+
+	test("enqueueing the same session_key twice keeps only the latest summary", () => {
+		const queue = new EvolutionQueue(db);
+		queue.enqueue(
+			makeSummary({
+				session_id: "turn-3",
+				session_key: "slack:C1:T1",
+				user_messages: ["short turn 3"],
+			}),
+			DECISION,
+		);
+		queue.enqueue(
+			makeSummary({
+				session_id: "turn-15",
+				session_key: "slack:C1:T1",
+				user_messages: ["full conversation up through turn 15"],
+				cost_usd: 0.42,
+			}),
+			DECISION,
+		);
+		expect(queue.depth()).toBe(1);
+		const drained = queue.drainAll();
+		expect(drained).toHaveLength(1);
+		// The most recent enqueue wins. Without dedup, a busy multi-turn
+		// session would burn the full Sonnet judge pipeline once per turn that
+		// crossed the gate, against progressively shorter snapshots of the
+		// same conversation.
+		expect(drained[0].session_id).toBe("turn-15");
+		expect(drained[0].session_summary.user_messages).toEqual(["full conversation up through turn 15"]);
+		expect(drained[0].session_summary.cost_usd).toBeCloseTo(0.42, 5);
+	});
+
+	test("dedup is scoped per session_key, not per session_id", () => {
+		const queue = new EvolutionQueue(db);
+		queue.enqueue(makeSummary({ session_id: "a", session_key: "slack:C1:T1" }), DECISION);
+		queue.enqueue(makeSummary({ session_id: "b", session_key: "slack:C2:T2" }), DECISION);
+		queue.enqueue(makeSummary({ session_id: "c", session_key: "slack:C1:T1" }), DECISION);
+		expect(queue.depth()).toBe(2);
+		const drained = queue.drainAll();
+		const keys = drained.map((d) => d.session_key).sort();
+		expect(keys).toEqual(["slack:C1:T1", "slack:C2:T2"]);
+		const c1Row = drained.find((d) => d.session_key === "slack:C1:T1");
+		expect(c1Row?.session_id).toBe("c");
 	});
 
 	test("clear truncates the queue", () => {

@@ -112,9 +112,10 @@ async function main(): Promise<void> {
 	let evolution: EvolutionEngine | null = null;
 	let evolutionCadence: EvolutionCadence | null = null;
 	try {
-		evolution = new EvolutionEngine(undefined, runtime);
-		const currentVersion = evolution.getCurrentVersion();
-		const judgeMode = evolution.usesLLMJudges() ? "LLM judges" : "heuristic";
+		const engine = new EvolutionEngine(undefined, runtime);
+		evolution = engine;
+		const currentVersion = engine.getCurrentVersion();
+		const judgeMode = engine.usesLLMJudges() ? "LLM judges" : "heuristic";
 		console.log(`[evolution] Engine initialized (v${currentVersion}, ${judgeMode})`);
 		setEvolutionVersionProvider(() => evolution?.getCurrentVersion() ?? 0);
 
@@ -123,9 +124,17 @@ async function main(): Promise<void> {
 		// route through `onEnqueue` which fires a drain whenever the queue
 		// depth crosses `demandTriggerDepth`.
 		const queue = new EvolutionQueue(db);
-		const cadenceConfig = loadCadenceConfig(evolution.getEvolutionConfig());
-		evolutionCadence = new EvolutionCadence(evolution, queue, evolution.getEvolutionConfig(), cadenceConfig);
-		evolution.setQueueWiring(queue, () => evolutionCadence?.onEnqueue());
+		const cadenceConfig = loadCadenceConfig(engine.getEvolutionConfig());
+		evolutionCadence = new EvolutionCadence(engine, queue, engine.getEvolutionConfig(), cadenceConfig);
+		engine.setQueueWiring(queue, () => evolutionCadence?.onEnqueue());
+		// The cadence drains the queue out-of-band, so the runtime's in-memory
+		// evolved config snapshot must be refreshed from disk after each
+		// applied change. Without this callback the queued path would rewrite
+		// `phantom-config/` files but the live agent would keep prompting with
+		// the boot-time snapshot until the process restarts.
+		engine.setOnConfigApplied(() => {
+			runtime.setEvolvedConfig(engine.getConfig());
+		});
 		evolutionCadence.start();
 		console.log(
 			`[evolution] Cadence started (cadence=${cadenceConfig.cadenceMinutes}min, demand_trigger=${cadenceConfig.demandTriggerDepth})`,

@@ -42,9 +42,15 @@ function newDb(): Database {
 }
 
 function makeSummary(overrides: Partial<SessionSummary> = {}): SessionSummary {
+	const sessionId = overrides.session_id ?? "s1";
+	// Default the session_key off the session_id so each fixture row gets a
+	// distinct key. The queue dedups by session_key, so two enqueues with the
+	// same key collapse into a single row, which is correct production
+	// behavior but breaks any test that uses session_id alone to distinguish
+	// rows.
 	return {
-		session_id: "s1",
-		session_key: "slack:C1:T1",
+		session_id: sessionId,
+		session_key: `slack:C-${sessionId}:T-${sessionId}`,
 		user_id: "u1",
 		user_messages: ["help"],
 		assistant_messages: ["ok"],
@@ -292,6 +298,42 @@ describe("EvolutionCadence", () => {
 			// Wait long enough for the cron timer to fire.
 			await new Promise((r) => setTimeout(r, 40));
 			expect(queue.depth()).toBe(0);
+		} finally {
+			cadence.stop();
+		}
+	});
+
+	test("failed pipeline rows stay in the queue while ok rows are deleted", async () => {
+		const config = setupEnv();
+		const db = newDb();
+		const queue = new EvolutionQueue(db);
+		let calls = 0;
+		const engine = fakeEngine({
+			onRun: async (session) => {
+				calls += 1;
+				if (session.session_id === "fail-me") {
+					throw new Error("simulated transient pipeline failure");
+				}
+				return { version: 1, changes_applied: [], changes_rejected: [] };
+			},
+		});
+		const cadence = new EvolutionCadence(engine, queue, config, { cadenceMinutes: 1_000_000, demandTriggerDepth: 999 });
+		cadence.start();
+		try {
+			// Distinct session_keys so the dedup-on-enqueue from M3 does not
+			// collapse them into a single row.
+			queue.enqueue(makeSummary({ session_id: "ok-1", session_key: "slack:C1:T1" }), DECISION);
+			queue.enqueue(makeSummary({ session_id: "fail-me", session_key: "slack:C2:T2" }), DECISION);
+			queue.enqueue(makeSummary({ session_id: "ok-2", session_key: "slack:C3:T3" }), DECISION);
+			const result = await cadence.triggerNow();
+			expect(result?.processed).toBe(3);
+			expect(result?.failureCount).toBe(1);
+			expect(calls).toBe(3);
+
+			// Only the failing row remains; the two ok rows were deleted.
+			const remaining = queue.drainAll();
+			expect(remaining).toHaveLength(1);
+			expect(remaining[0].session_id).toBe("fail-me");
 		} finally {
 			cadence.stop();
 		}
