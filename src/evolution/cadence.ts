@@ -165,7 +165,24 @@ export class EvolutionCadence {
 			`[evolution] draining batch of ${queued.length} sessions (trigger=${trigger}, cadence=${this.cadenceConfig.cadenceMinutes}min)`,
 		);
 		const result = await processBatch(queued, this.engine);
-		this.queue.markProcessed(queued.map((q) => q.id));
+
+		// Only delete rows whose pipeline succeeded. Failed rows stay in the
+		// queue so the next drain retries them; deleting on failure would
+		// silently drop the exact sessions the safety floor exists to protect
+		// (transient judge subprocess errors, network blips, CycleAborted from
+		// the Phase 0 failure ceiling). A future PR will add a `failure_count`
+		// column and a poison-pill ceiling so a single bad row cannot loop
+		// forever, but the dedup-by-session_key on enqueue already bounds the
+		// loss for repeated sessions.
+		const okIds: number[] = [];
+		for (const entry of result.results) {
+			if (entry.ok) {
+				okIds.push(entry.id);
+			} else {
+				console.warn(`[evolution] queue row id=${entry.id} pipeline failed, leaving in queue: ${entry.error}`);
+			}
+		}
+		this.queue.markProcessed(okIds);
 
 		const appliedCount = result.results.reduce((sum, r) => {
 			if (r.ok) return sum + r.result.changes_applied.length;

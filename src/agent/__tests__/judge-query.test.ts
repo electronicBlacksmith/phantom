@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod/v4";
-import { __absorbUsageForTest, parseJsonFromResponse } from "../judge-query.ts";
+import { __absorbUsageForTest, buildSystemPrompt, parseJsonFromResponse } from "../judge-query.ts";
 
 // parseJsonFromResponse is the shape-normalization layer for judge subprocess output.
 // Models sometimes return markdown fences, leading prose, or trailing whitespace even
@@ -115,6 +115,27 @@ describe("parseJsonFromResponse", () => {
 		expect(partial.inputTokens).toBe(1010);
 		expect(partial.outputTokens).toBe(22);
 		expect(partial.costUsd).toBe(0);
+	});
+
+	test("buildSystemPrompt returns the claude_code preset envelope by default", () => {
+		const prompt = buildSystemPrompt("evaluate this", false);
+		expect(typeof prompt).toBe("object");
+		if (typeof prompt === "object") {
+			expect(prompt.type).toBe("preset");
+			expect(prompt.preset).toBe("claude_code");
+			expect(prompt.append).toBe("evaluate this");
+		}
+	});
+
+	test("buildSystemPrompt returns a plain string when omitPreset is true", () => {
+		// This is the C3 fix shape: the SDK accepts a plain-string systemPrompt
+		// per its docstring ("Use a custom system prompt") and that path skips
+		// the preset's base prompt and full tool catalog. The gate is the only
+		// caller that flips this on, because it is a pure pass/skip evaluation
+		// with no tool use. Other judges keep the preset.
+		const prompt = buildSystemPrompt("evaluate this", true);
+		expect(typeof prompt).toBe("string");
+		expect(prompt).toBe("evaluate this");
 	});
 
 	test("parses nested structures", () => {

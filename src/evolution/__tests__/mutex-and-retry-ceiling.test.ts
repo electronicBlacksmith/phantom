@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { JudgeSubprocessError } from "../../agent/judge-query.ts";
 import type { AgentRuntime } from "../../agent/runtime.ts";
 import type { PhantomConfig } from "../../config/types.ts";
@@ -356,11 +356,17 @@ describe("Phase 0 mutex guard", () => {
 		}
 	});
 
-	test("mutex skip path still bumps session_count so dashboards do not undercount", async () => {
-		// M4: without this the normal-vs-skip paths diverge and operators
-		// watching session_count in the dashboard see undercounting during
-		// bursts. The skip path now updates session metrics with
-		// hadCorrections=false at the top of afterSession.
+	test("mutex skip path returns a skipped result without spawning a new cycle", async () => {
+		// Phase 1+2 collapsed `updateAfterSession` to a single call inside
+		// `runCycle`, after observation extraction supplies the real
+		// `hadCorrections` value. The previous Phase 0 M4 top-of-afterSession
+		// increment was load-bearing only while the mutex could permanently
+		// drop a session; the persistent queue replaces that drop-on-floor
+		// path so an enqueued session eventually reaches `runCycle` and the
+		// counter increments exactly once. This test pins the new shape: the
+		// active cycle still holds the mutex, the second call sees the guard
+		// and returns a skipped result with zero applied changes, and no
+		// extra runCycle is launched on top of the hanging one.
 		type Releaser = (reason: unknown) => void;
 		const releaseHangRef: { fn: Releaser | null } = { fn: null };
 		const hang = new Promise<never>((_resolve, reject) => {
@@ -376,15 +382,12 @@ describe("Phase 0 mutex guard", () => {
 		const callA = engine.afterSession(makeSession({ session_id: "active" }));
 		await Promise.resolve();
 		await Promise.resolve();
-		await engine.afterSession(makeSession({ session_id: "skip-1" }));
-		await engine.afterSession(makeSession({ session_id: "skip-2" }));
+		const skipResult1 = await engine.afterSession(makeSession({ session_id: "skip-1" }));
+		const skipResult2 = await engine.afterSession(makeSession({ session_id: "skip-2" }));
 
-		const metricsPath = `${TEST_DIR}/phantom-config/meta/metrics.json`;
-		const metrics = JSON.parse(readFileSync(metricsPath, "utf-8"));
-		// Three afterSession calls, three counter increments from the top-of-
-		// afterSession update. The active call is still hanging so its inner
-		// updateAfterSession has not run yet, so we assert exactly 3.
-		expect(metrics.session_count).toBe(3);
+		expect(skipResult1.changes_applied).toHaveLength(0);
+		expect(skipResult2.changes_applied).toHaveLength(0);
+		expect((engine as unknown as { activeCycleSkipCount: number }).activeCycleSkipCount).toBe(2);
 
 		releaseHangRef.fn?.(new Error("released by test"));
 		try {

@@ -66,6 +66,13 @@ export class EvolutionEngine {
 	// not care about batching can still construct a bare engine.
 	private queue: EvolutionQueue | null = null;
 	private onEnqueue: (() => void) | null = null;
+	// Fires after a cycle (including a partial-apply CycleAborted recovery)
+	// applies at least one change to disk. Wired in `src/index.ts` so the
+	// AgentRuntime in-memory `evolvedConfig` snapshot refreshes whenever the
+	// queue drain produces new state. Without this, the queued path would
+	// rewrite `phantom-config/` files but the live agent would keep using its
+	// boot-time snapshot until the process restarts.
+	private onConfigApplied: (() => void) | null = null;
 
 	// `runtime` is optional so existing tests and heuristic-only deployments can
 	// construct an engine without wiring a full AgentRuntime. When the engine
@@ -95,6 +102,17 @@ export class EvolutionEngine {
 	setQueueWiring(queue: EvolutionQueue, onEnqueue: () => void): void {
 		this.queue = queue;
 		this.onEnqueue = onEnqueue;
+	}
+
+	/**
+	 * Register a callback that fires whenever a cycle applies at least one
+	 * change to disk. Wired from `src/index.ts` to refresh the AgentRuntime's
+	 * in-memory evolved config snapshot. Matches the setter shape used by
+	 * `setQueueWiring` so the engine still owns the lifecycle and the cadence
+	 * stays ignorant of the runtime.
+	 */
+	setOnConfigApplied(callback: () => void): void {
+		this.onConfigApplied = callback;
 	}
 
 	private resolveJudgeMode(): boolean {
@@ -164,7 +182,6 @@ export class EvolutionEngine {
 	 * serializing gate calls through the mutex would defeat the purpose.
 	 */
 	async enqueueIfWorthy(session: SessionSummary): Promise<EnqueueResult> {
-		updateAfterSession(this.config, session.outcome, false);
 		const decision = await decideGate(session, this.runtime);
 		appendGateLog(this.config, session, decision);
 		recordGateDecision(this.config, decision);
@@ -213,17 +230,12 @@ export class EvolutionEngine {
 	}
 
 	private async afterSessionInternal(session: SessionSummary): Promise<EvolutionResult> {
-		// Always bump the session counter so the dashboard's `session_count`
-		// reflects every turn that arrived, including skipped ones. On the skip
-		// path we pass `hadCorrections=false` because no observation extraction
-		// has run yet. The normal path also calls `updateAfterSession` inside
-		// `runCycle` with the real `hadCorrections` value after observations
-		// are extracted, so the correction signal remains accurate. The small
-		// double-count on `session_count` during a running cycle is accepted:
-		// Phase 2 replaces the drop-on-floor model with a real cadence queue
-		// and this bookkeeping goes away.
-		updateAfterSession(this.config, session.outcome, false);
-
+		// Phase 2 replaced the drop-on-floor mutex with a persistent queue, so
+		// every session that crosses the gate eventually reaches `runCycle`,
+		// which is the single place `session_count` is incremented (with the
+		// real `hadCorrections` value after observation extraction). The Phase
+		// 0 M4 increment that used to live here was load-bearing only while
+		// the mutex could permanently drop a session.
 		if (this.activeCycle !== null) {
 			this.activeCycleSkipCount += 1;
 			const activeId = this.activeCycleSessionId ?? "unknown";
@@ -341,6 +353,7 @@ export class EvolutionEngine {
 							`[evolution] Partial apply: ${partialApplied.length} changes applied ` +
 								`(v${this.getCurrentVersion()}) after cycle abort`,
 						);
+						this.notifyConfigApplied();
 					}
 					if (partialRejected.length > 0) {
 						console.log(`[evolution] Partial apply: ${partialRejected.length} changes rejected after cycle abort`);
@@ -371,6 +384,7 @@ export class EvolutionEngine {
 			console.log(
 				`[evolution] Applied ${applied.length} changes (v${this.getCurrentVersion()}) in ${Date.now() - startTime}ms`,
 			);
+			this.notifyConfigApplied();
 
 			// Promote successful corrections to golden suite
 			if (session.outcome === "success" && hadCorrections) {
@@ -526,6 +540,19 @@ export class EvolutionEngine {
 		const removed = pruneSuite(this.config, maxSize);
 		if (removed > 0) {
 			console.log(`[evolution] Pruned ${removed} oldest golden suite entries (cap: ${maxSize})`);
+		}
+	}
+
+	private notifyConfigApplied(): void {
+		if (!this.onConfigApplied) return;
+		try {
+			this.onConfigApplied();
+		} catch (err: unknown) {
+			// A telemetry/refresh failure must not wedge the evolution pipeline.
+			// The next applied change will retry, and the disk-side state is
+			// already correct regardless of whether the callback succeeded.
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[evolution] onConfigApplied callback threw: ${msg}`);
 		}
 	}
 

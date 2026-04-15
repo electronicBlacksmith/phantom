@@ -65,6 +65,7 @@ type FakeRuntime = {
 		schema: unknown;
 		model?: string;
 		maxTokens?: number;
+		omitPreset?: boolean;
 	}) => Promise<unknown>;
 };
 
@@ -91,6 +92,41 @@ describe("decideGate Haiku happy path", () => {
 		expect(decision.source).toBe("haiku");
 		expect(decision.haiku_cost_usd).toBeCloseTo(0.0006, 6);
 		expect(decision.reason).toContain("naming");
+	});
+
+	test("gate forwards omitPreset=true so judgeQuery skips the claude_code preset envelope", async () => {
+		// The gate is a pure pass/skip evaluation that never reads files or
+		// runs tools, so it must opt out of the `claude_code` system prompt
+		// preset that bundles the full Claude Code base prompt and tool
+		// catalog. Live fleet data showed gate cost running 20-180x the
+		// research target until this flag was wired through. Asserting the
+		// flag at the call site is the durable defense against a future
+		// refactor accidentally re-introducing the preset overhead.
+		const captured: Array<{ omitPreset?: boolean; model?: string; maxTokens?: number }> = [];
+		const runtime: FakeRuntime = {
+			judgeQuery: async (options) => {
+				captured.push({
+					omitPreset: options.omitPreset,
+					model: options.model,
+					maxTokens: options.maxTokens,
+				});
+				return {
+					verdict: "pass" as const,
+					confidence: 0.9,
+					reasoning: "",
+					data: { evolve: false, reason: "routine" },
+					model: "claude-haiku-4-5",
+					inputTokens: 420,
+					outputTokens: 28,
+					costUsd: 0.0005,
+					durationMs: 900,
+				};
+			},
+		};
+		await decideGate(makeSession(), runtime as unknown as AgentRuntime);
+		expect(captured).toHaveLength(1);
+		expect(captured[0].omitPreset).toBe(true);
+		expect(captured[0].maxTokens).toBe(200);
 	});
 
 	test("evolve=false returns skip source=haiku", async () => {

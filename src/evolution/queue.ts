@@ -61,18 +61,26 @@ export class EvolutionQueue {
 	constructor(private db: Database) {}
 
 	/**
-	 * Insert one row per gate-approved session. Called from
-	 * `engine.enqueueIfWorthy` after `decideGate` returns `fire=true`.
-	 * Silent on duplicates: a busy multi-turn session can fire multiple
-	 * times and each turn legitimately wants its own row because the
-	 * batch processor ingests the latest summary when the row is drained.
+	 * Insert one row per gate-approved session, latest summary wins for any
+	 * given `session_key`. A busy multi-turn session that crosses the gate
+	 * threshold more than once between drains would otherwise enqueue several
+	 * stale rows for the same conversation, each of which would run the full
+	 * judge pipeline against an older snapshot of the same dialog. Wrapping
+	 * the delete and insert in a single transaction keeps the dedup atomic
+	 * with respect to a concurrent `drainAll`.
 	 */
 	enqueue(summary: SessionSummary, decision: GateDecision): void {
-		const stmt = this.db.query(
-			`INSERT INTO evolution_queue (session_id, session_key, gate_decision_json, session_summary_json)
-			VALUES (?, ?, ?, ?)`,
+		const tx = this.db.transaction(
+			(sessionKey: string, sessionId: string, decisionJson: string, summaryJson: string) => {
+				this.db.run("DELETE FROM evolution_queue WHERE session_key = ?", [sessionKey]);
+				this.db.run(
+					`INSERT INTO evolution_queue (session_id, session_key, gate_decision_json, session_summary_json)
+				VALUES (?, ?, ?, ?)`,
+					[sessionId, sessionKey, decisionJson, summaryJson],
+				);
+			},
 		);
-		stmt.run(summary.session_id, summary.session_key, JSON.stringify(decision), JSON.stringify(summary));
+		tx(summary.session_key, summary.session_id, JSON.stringify(decision), JSON.stringify(summary));
 	}
 
 	depth(): number {

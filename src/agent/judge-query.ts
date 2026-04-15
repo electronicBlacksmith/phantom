@@ -16,6 +16,17 @@ export type JudgeQueryOptions<T> = {
 	schema: z.ZodType<T>;
 	model?: string;
 	maxTokens?: number;
+	/**
+	 * When true, the SDK is invoked with a plain-string `systemPrompt` instead
+	 * of the `claude_code` preset envelope. The preset bundles the full Claude
+	 * Code base prompt and tool catalog, which costs thousands of input tokens
+	 * per call. Pure evaluation calls that do not use any tools (the
+	 * conditional firing gate is the canonical example) should set this so
+	 * Haiku only sees the judge prompt and the session summary, not the entire
+	 * Claude Code surface area. Other judges that legitimately want the preset
+	 * keep the default.
+	 */
+	omitPreset?: boolean;
 };
 
 export type JudgeQueryResult<T> = {
@@ -142,17 +153,15 @@ export async function runJudgeQuery<T>(
 	// whenever ANTHROPIC_API_KEY happened to be set in the shell.
 	const providerEnv = buildProviderEnv(config);
 
+	const systemPrompt = buildSystemPrompt(judgePrompt, options.omitPreset === true);
+
 	const queryStream = query({
 		prompt: options.userMessage,
 		options: {
 			model: resolvedModel,
 			permissionMode: "bypassPermissions",
 			allowDangerouslySkipPermissions: true,
-			systemPrompt: {
-				type: "preset" as const,
-				preset: "claude_code" as const,
-				append: judgePrompt,
-			},
+			systemPrompt,
 			maxTurns: 1,
 			effort: "low",
 			persistSession: false,
@@ -306,6 +315,29 @@ export function __absorbUsageForTest(
 		if (m.usage) absorb(m.usage);
 	}
 	return partial;
+}
+
+/**
+ * Compose the SDK `systemPrompt` value. The default path keeps the
+ * `claude_code` preset envelope so judges designed against the Claude Code
+ * tool catalog continue to receive the full base prompt. When the caller
+ * sets `omitPreset`, the SDK is handed a plain string instead, which the
+ * SDK documents as "Use a custom system prompt" and which skips the preset's
+ * base prompt and tool descriptions entirely. The gate uses this to drop
+ * two orders of magnitude of input tokens per call.
+ */
+export function buildSystemPrompt(
+	judgePrompt: string,
+	omitPreset: boolean,
+): string | { type: "preset"; preset: "claude_code"; append: string } {
+	if (omitPreset) {
+		return judgePrompt;
+	}
+	return {
+		type: "preset" as const,
+		preset: "claude_code" as const,
+		append: judgePrompt,
+	};
 }
 
 function buildJudgePrompt(systemPrompt: string, schemaJson: unknown): string {
