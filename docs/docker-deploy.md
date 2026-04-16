@@ -55,7 +55,7 @@ PHANTOM_NAME=<name>
 
 Optional:
 ```
-PHANTOM_MODEL=claude-sonnet-4-6    # Default. Use claude-opus-4-6 for max capability.
+PHANTOM_MODEL=claude-opus-4-7      # Default. Use claude-sonnet-4-6 for lower cost.
 PHANTOM_DOMAIN=ghostwright.dev     # Enables public URL: https://<name>.ghostwright.dev
 ```
 

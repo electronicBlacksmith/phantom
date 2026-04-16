@@ -43,6 +43,17 @@ export function SessionRoute() {
   }, [sessionId, loadSession, location.state, clearFiles]);
 
   useEffect(() => {
+    // Listen for the Cmd+. stop shortcut dispatched from AppShell. Only
+    // abort when a stream is actually in flight so the shortcut stays
+    // idempotent on an idle session.
+    const onStop = (): void => {
+      if (isStreaming) abort();
+    };
+    window.addEventListener("phantom:stop-generation", onStop);
+    return () => window.removeEventListener("phantom:stop-generation", onStop);
+  }, [isStreaming, abort]);
+
+  useEffect(() => {
     const state = location.state as { initialMessage?: string } | null;
     if (state?.initialMessage && sessionId) {
       sendMessage(state.initialMessage);

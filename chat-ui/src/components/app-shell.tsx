@@ -1,5 +1,8 @@
-import { useCallback, useState } from "react";
+import { PanelLeft } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { Toaster } from "@/ui/sonner";
+import { useBootstrap } from "@/hooks/use-bootstrap";
 import { useKeyboard } from "@/hooks/use-keyboard";
 import { useSessions } from "@/hooks/use-sessions";
 import { useTheme } from "@/hooks/use-theme";
@@ -16,6 +19,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     useSessions();
   const { toggleTheme } = useTheme();
   const isMobile = useIsMobile();
+  const { data: bootstrap, cachedName } = useBootstrap();
+
+  const agentName = bootstrap?.agent_name ?? cachedName ?? "Agent";
 
   const [sidebarOpen, setSidebarOpen] = useState(!isMobile);
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -23,6 +29,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     title: string | null;
   } | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+
+  // Update the browser tab title once we know the agent name. Picks up
+  // cached name immediately on reload and refreshes when fresh data lands.
+  useEffect(() => {
+    if (agentName && agentName !== "Agent") {
+      document.title = agentName;
+    }
+  }, [agentName]);
+
+  // Post agent name to the Service Worker so push notifications with no
+  // title fall back to the real agent name instead of "Phantom".
+  useEffect(() => {
+    if (!agentName || agentName === "Agent") return;
+    if (typeof navigator === "undefined" || !navigator.serviceWorker) return;
+    navigator.serviceWorker.ready
+      .then((reg) => {
+        reg.active?.postMessage({ type: "SET_AGENT_NAME", agentName });
+      })
+      .catch(() => {});
+  }, [agentName]);
 
   const handleNewSession = useCallback(async () => {
     const id = await createSession();
@@ -65,10 +91,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setHelpOpen(true);
   }, []);
 
+  const handleStopGeneration = useCallback(() => {
+    // SessionRoute listens for this event and calls abort on the active
+    // chat hook. Using a custom event keeps AppShell decoupled from the
+    // per-route chat state.
+    window.dispatchEvent(new CustomEvent("phantom:stop-generation"));
+  }, []);
+
+  const handleFocusComposer = useCallback(() => {
+    const el = document.getElementById("chat-composer");
+    if (el && typeof (el as HTMLElement).focus === "function") {
+      (el as HTMLElement).focus();
+    }
+  }, []);
+
   useKeyboard({
     newSession: handleNewSession,
     toggleTheme,
     keyboardHelp: handleShowKeyboardHelp,
+    stopGeneration: handleStopGeneration,
+    focusComposer: handleFocusComposer,
   });
 
   return (
@@ -108,22 +150,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             className="mr-3 text-muted-foreground hover:text-foreground"
             aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
           >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              fill="none"
-              className="h-4 w-4"
-            >
-              <path
-                d="M2 4h12M2 8h12M2 12h12"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
-            </svg>
+            <PanelLeft className="h-4 w-4" />
           </button>
-          <span className="text-sm font-medium text-foreground">Phantom</span>
+          <span className="text-sm font-medium text-foreground">
+            {agentName}
+          </span>
         </header>
 
         <main id="main-content" className="flex min-h-0 flex-1 flex-col">{children}</main>
@@ -146,6 +177,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         onConfirm={handleDeleteConfirm}
         sessionTitle={deleteTarget?.title ?? null}
       />
+
+      <Toaster position="bottom-right" />
     </div>
   );
 }

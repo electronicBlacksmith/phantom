@@ -118,22 +118,22 @@ main { animation: phantom-fade-in 300ms var(--ease-out); }
       <div class="phantom-stat">
         <p class="phantom-stat-label">Agent</p>
         <p class="phantom-stat-value" id="stat-agent" data-agent-name-lower>&nbsp;</p>
-        <p class="phantom-stat-trend-flat">swe role</p>
+        <p class="phantom-stat-trend-flat" id="stat-role">-</p>
       </div>
       <div class="phantom-stat">
         <p class="phantom-stat-label">Version</p>
-        <p class="phantom-stat-value phantom-mono" id="stat-version" style="font-size:22px;">0.18.2</p>
+        <p class="phantom-stat-value phantom-mono" id="stat-version" style="font-size:22px;">-</p>
         <p class="phantom-stat-trend-flat">stable</p>
       </div>
       <div class="phantom-stat">
         <p class="phantom-stat-label">Uptime</p>
-        <p class="phantom-stat-value" id="stat-uptime">14h 32m</p>
-        <p class="phantom-stat-trend-up">+2h since restart</p>
+        <p class="phantom-stat-value" id="stat-uptime">-</p>
+        <p class="phantom-stat-trend-flat">since boot</p>
       </div>
       <div class="phantom-stat">
         <p class="phantom-stat-label">Evolution</p>
-        <p class="phantom-stat-value" id="stat-evolution">Gen 3</p>
-        <p class="phantom-stat-trend-up">+1 this week</p>
+        <p class="phantom-stat-value" id="stat-evolution">Gen -</p>
+        <p class="phantom-stat-trend-flat">current</p>
       </div>
     </div>
   </section>
@@ -198,6 +198,62 @@ main { animation: phantom-fade-in 300ms var(--ease-out); }
 })();
 document.getElementById('current-date').textContent=new Date().toISOString().split('T')[0];
 document.getElementById('footer-time').textContent=new Date().toISOString();
+
+// Live agent status from /health. Fails silently and leaves placeholders
+// so a broken /health does not mislead viewers with stale numbers.
+(function () {
+  function humanUptime(seconds) {
+    if (typeof seconds !== "number" || seconds < 0) return "-";
+    var d = Math.floor(seconds / 86400);
+    var h = Math.floor((seconds % 86400) / 3600);
+    var m = Math.floor((seconds % 3600) / 60);
+    if (d >= 1) return d + "d " + h + "h";
+    if (h >= 1) return h + "h " + m + "m";
+    return m + "m";
+  }
+
+  function apply(data) {
+    var v = document.getElementById("stat-version");
+    var u = document.getElementById("stat-uptime");
+    var e = document.getElementById("stat-evolution");
+    var roleEl = document.getElementById("stat-role");
+    var badge = document.getElementById("status-badge");
+    if (v) v.textContent = data && data.version ? data.version : "-";
+    if (u) u.textContent = data && typeof data.uptime === "number" ? humanUptime(data.uptime) : "-";
+    if (e) {
+      var gen = data && data.evolution && typeof data.evolution.generation === "number"
+        ? data.evolution.generation : null;
+      e.textContent = gen == null ? "Gen -" : "Gen " + gen;
+    }
+    if (roleEl) {
+      var roleName = data && data.role ? (data.role.name || data.role.id || "") : "";
+      roleEl.textContent = roleName ? roleName + " role" : "-";
+    }
+    if (badge) {
+      if (data && data.status === "ok") {
+        badge.className = "phantom-badge phantom-badge-success";
+        badge.innerHTML = '<span class="phantom-dot phantom-dot-live"></span> online';
+      } else if (data && data.status === "degraded") {
+        badge.className = "phantom-badge";
+        badge.innerHTML = '<span class="phantom-dot"></span> degraded';
+      } else if (data && data.status) {
+        badge.className = "phantom-badge";
+        badge.innerHTML = '<span class="phantom-dot"></span> ' + data.status;
+      } else {
+        // /health failed or returned no status. Reset to a neutral
+        // "unknown" state rather than leaving the initial "online"
+        // badge pinned on a page that cannot reach the agent.
+        badge.className = "phantom-badge";
+        badge.innerHTML = '<span class="phantom-dot"></span> unknown';
+      }
+    }
+  }
+
+  fetch("/health", { credentials: "same-origin" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(apply)
+    .catch(function () { apply(null); });
+})();
 </script>
 </body>
 </html>

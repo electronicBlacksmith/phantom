@@ -11,6 +11,35 @@
 	function qs(sel) { return document.querySelector(sel); }
 	function qsa(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
 
+	// Structural deep equality shared across dashboard tabs. Used in dirty
+	// checks so client-built frontmatter compares equal to server-returned
+	// baselines regardless of JSON.stringify key order.
+	function deepEqual(a, b) {
+		if (a === b) return true;
+		if (a == null || b == null) return a === b;
+		if (typeof a !== typeof b) return false;
+		if (Array.isArray(a) || Array.isArray(b)) {
+			if (!Array.isArray(a) || !Array.isArray(b)) return false;
+			if (a.length !== b.length) return false;
+			for (var i = 0; i < a.length; i++) {
+				if (!deepEqual(a[i], b[i])) return false;
+			}
+			return true;
+		}
+		if (typeof a === "object") {
+			var ak = Object.keys(a);
+			var bk = Object.keys(b);
+			if (ak.length !== bk.length) return false;
+			for (var j = 0; j < ak.length; j++) {
+				var k = ak[j];
+				if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+				if (!deepEqual(a[k], b[k])) return false;
+			}
+			return true;
+		}
+		return false;
+	}
+
 	function esc(s) {
 		if (s == null) return "";
 		return String(s)
@@ -260,6 +289,7 @@
 				navigate: navigate,
 				setBreadcrumb: setBreadcrumb,
 				registerDirtyChecker: registerDirtyChecker,
+				deepEqual: deepEqual,
 			});
 			activeRoute = window.location.hash || ("#/" + name);
 		} else if (comingSoon.indexOf(name) >= 0) {

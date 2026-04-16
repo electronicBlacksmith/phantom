@@ -9,12 +9,25 @@ export const PeerConfigSchema = z.object({
 });
 
 export const PhantomConfigSchema = z.object({
-	name: z.string().min(1),
+	// name feeds the email from-address local-part, subject line, HTML body,
+	// PWA manifest, browser title, and Slack display name. Restrict to a
+	// conservative charset that is safe in every surface: ASCII alphanumerics
+	// plus spaces, underscores, dots, and hyphens. Leading character must be
+	// alphanumeric so the email local-part sanitizer has something to keep.
+	// Prevents CRLF injection in email headers and HTML injection in the body.
+	name: z
+		.string()
+		.min(1)
+		.max(64)
+		.regex(/^[A-Za-z0-9][A-Za-z0-9 _.-]*$/, {
+			message:
+				"name must start with a letter or digit and contain only letters, digits, spaces, underscores, dots, and hyphens",
+		}),
 	domain: z.string().optional(),
 	public_url: z.string().url().optional(),
 	port: z.number().int().min(1).max(65535).default(3100),
 	role: z.string().min(1).default("swe"),
-	model: z.string().min(1).default("claude-sonnet-4-6"),
+	model: z.string().min(1).default("claude-opus-4-7"),
 	// Optional override for the model used by evolution judges. Defaults to `model` when omitted
 	// so a single-model deployment "just works". Lets operators run a cheaper model for judging
 	// while keeping a more capable model for the primary agent.

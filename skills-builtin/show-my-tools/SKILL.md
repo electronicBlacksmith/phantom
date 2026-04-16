@@ -90,7 +90,7 @@ Format the response like this:
 > - **research-intern** - fetch a paper and summarize into five bullets
 > - **qa-checker** - verify that unit tests ran and passed
 >
-> **Settings summary.** Permission mode: default. Model: claude-opus-4-6. 3 MCP servers enabled. Auto-memory: on. 2 allowed HTTP hook URLs.
+> **Settings summary.** Permission mode: default. Model: claude-opus-4-7. 3 MCP servers enabled. Auto-memory: on. 2 allowed HTTP hook URLs.
 >
 > **Dashboard.** You can see and edit all of the above at `<public_url>/ui/dashboard/`. Six tabs are live: skills, memory files, plugins, subagents, hooks, settings. The other tabs (sessions, cost, scheduler, evolution, memory explorer) are coming in later releases.
 

@@ -120,11 +120,11 @@ RESEND_API_KEY=re_...
 
 ```
 PHANTOM_NAME=phantom
-PHANTOM_MODEL=claude-sonnet-4-6
+PHANTOM_MODEL=claude-opus-4-7
 ```
 
 - `PHANTOM_NAME` - What your Phantom calls itself. Default: `phantom`.
-- `PHANTOM_MODEL` - The Claude model. Options: `claude-sonnet-4-6` (default, recommended) or `claude-opus-4-6` (more capable, higher cost).
+- `PHANTOM_MODEL` - The Claude model. Options: `claude-opus-4-7` (default, recommended), `claude-sonnet-4-6` (lower cost), `claude-opus-4-6` (previous frontier).
 
 Everything else in `.env.example` has sensible defaults. You can leave the rest commented out.
 
@@ -255,7 +255,7 @@ SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_APP_TOKEN=xapp-your-app-token
 OWNER_SLACK_USER_ID=U04ABC123XY
 PHANTOM_NAME=your-phantom-name
-PHANTOM_MODEL=claude-sonnet-4-6
+PHANTOM_MODEL=claude-opus-4-7
 EOF
 ```
 

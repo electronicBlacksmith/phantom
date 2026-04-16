@@ -89,18 +89,15 @@
 	function esc(s) { return ctx.esc(s); }
 
 	function blankDraft() {
+		// Defer to defaultDefinition so the blank-draft shape matches the
+		// shape produced after a type switch. Without this parity, flipping
+		// type=http then back to type=command produced a different key set
+		// than the initial snapshot, so the dirty checker fired on an
+		// otherwise no-op exploration.
 		return {
 			event: "PreToolUse",
 			matcher: "",
-			definition: {
-				type: "command",
-				command: "",
-				timeout: 30,
-				statusMessage: "",
-				once: false,
-				async: false,
-				asyncRewake: false,
-			},
+			definition: defaultDefinition("command"),
 		};
 	}
 
@@ -417,6 +414,12 @@
 		if (typeSel) typeSel.addEventListener("change", function () {
 			var newType = typeSel.value;
 			state.editing.draft.definition = defaultDefinition(newType);
+			// Reset the dirty baseline to the post-switch draft. Switching
+			// type is a deliberate schema change, not an unsaved edit; the
+			// operator has not typed anything meaningful yet. Without this
+			// reset the nav-confirm modal fires every time the operator
+			// explores the type dropdown.
+			state.editing.initialDraft = JSON.stringify(state.editing.draft);
 			render();
 		});
 		wireActionFields();
@@ -545,7 +548,8 @@
 		// their first http hook because http is a different risk
 		// profile. Type check happens again at save time so a type
 		// switch inside the builder gets caught.
-		state.editing = { mode: "new", draft: blankDraft() };
+		var draft = blankDraft();
+		state.editing = { mode: "new", draft: draft, initialDraft: JSON.stringify(draft) };
 		render();
 	}
 
@@ -554,12 +558,14 @@
 		if (!group) return;
 		var def = (group.hooks || [])[hookIndex];
 		if (!def) return;
+		var draft = { event: event, matcher: group.matcher || "", definition: JSON.parse(JSON.stringify(def)) };
 		state.editing = {
 			mode: "edit",
 			event: event,
 			groupIndex: groupIndex,
 			hookIndex: hookIndex,
-			draft: { event: event, matcher: group.matcher || "", definition: JSON.parse(JSON.stringify(def)) },
+			draft: draft,
+			initialDraft: JSON.stringify(draft),
 		};
 		render();
 	}
@@ -752,7 +758,12 @@
 		root = container;
 		ctx.setBreadcrumb("Hooks");
 		if (!state.initialized) {
-			ctx.registerDirtyChecker(function () { return state.editing != null; });
+			ctx.registerDirtyChecker(function () {
+				if (state.editing == null) return false;
+				// Compare current draft to the initial snapshot taken on
+				// modal open. Opening "Edit" without typing is not dirty.
+				return JSON.stringify(state.editing.draft) !== state.editing.initialDraft;
+			});
 			state.initialized = true;
 		}
 		return loadList();

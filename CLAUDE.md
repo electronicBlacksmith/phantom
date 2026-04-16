@@ -22,7 +22,7 @@ Phantom is an autonomous AI co-worker that runs as a persistent Bun process on a
 
 **TypeScript is plumbing. The Agent SDK is the brain.**
 
-The Agent SDK (Opus 4.6) has full computer access: Read, Write, Edit, Bash, Glob, Grep, WebSearch, Agent tools. It can understand natural language, read code, explore repos, detect tech stacks, clone repos, install packages, write configs, and reason about anything.
+The Agent SDK (Opus 4.7) has full computer access: Read, Write, Edit, Bash, Glob, Grep, WebSearch, Agent tools. It can understand natural language, read code, explore repos, detect tech stacks, clone repos, install packages, write configs, and reason about anything.
 
 TypeScript handles: starting processes, routing messages, managing sessions, storing data, serving HTTP endpoints, tracking state. Mechanical, deterministic work.
 
@@ -105,7 +105,7 @@ src/
     reflection.ts       # Post-session observation extraction
     validation.ts       # 5-gate validation (constitution, regression, size, drift, safety)
     versioning.ts       # Git-like config versioning with rollback
-    judges/             # LLM judges (Sonnet 4.6 as judge model)
+    judge-models.ts     # Sonnet is the default judge; Opus is opt-in
   mcp/
     server.ts           # MCP Streamable HTTP server
     tools-universal.ts  # 8 universal MCP tools
@@ -148,7 +148,7 @@ docs/                   # Documentation (architecture, channels, mcp, security, 
 
 ## Architecture Overview
 
-Message flow: Slack message -> SlackChannel adapter -> ChannelRouter -> SessionManager (find/create session) -> PromptAssembler (base + role + evolved config + memory context) -> AgentRuntime.query() (Opus 4.6 with full tools) -> response -> ChannelRouter -> Slack thread reply. Web chat uses the same flow: POST /chat/sessions/:id/message -> SSE stream of wire frames -> React client renders in real time. Two separate transcripts (wire-format message store for the client, SDK conversation for the agent) are kept in sync.
+Message flow: Slack message -> SlackChannel adapter -> ChannelRouter -> SessionManager (find/create session) -> PromptAssembler (base + role + evolved config + memory context) -> AgentRuntime.query() (Opus 4.7 with full tools) -> response -> ChannelRouter -> Slack thread reply. Web chat uses the same flow: POST /chat/sessions/:id/message -> SSE stream of wire frames -> React client renders in real time. Two separate transcripts (wire-format message store for the client, SDK conversation for the agent) are kept in sync.
 
 After each session: EvolutionEngine runs 6-step reflection pipeline -> 5-gate validation -> approved changes applied to phantom-config/ -> version bumped.
 
@@ -158,7 +158,7 @@ MCP flow: External client -> /mcp endpoint -> bearer auth -> MCP Server -> tool 
 
 **Qdrant over LanceDB:** WAL durability with crash recovery. Native hybrid search (dense + BM25 sparse vectors). Named vectors for separate embedding spaces. Mmap mode for low memory. TypeScript REST client works with Bun (no NAPI addon risk).
 
-**Sonnet as judge model:** Cross-model evaluation avoids self-enhancement bias. Opus judging its own output creates a conflict of interest. Safety/constitution gates use triple-judge minority veto (one dissent blocks the change).
+**Sonnet as default judge model:** The evolution pipeline uses Sonnet as the default judge model for safety-critical gates. Cross-model evaluation avoids self-enhancement bias: the main agent runs on Opus, so judges run on Sonnet. Operators may opt into Opus judges for deeper reasoning at higher cost. Safety/constitution gates use triple-judge minority veto (one dissent blocks the change).
 
 **Factory pattern for MCP servers:** The SDK connects each MCP server instance to one transport and rejects reuse. In-process MCP servers must be recreated per query() call. The registries they wrap are singletons, but the MCP server wrapper is new each time.
 

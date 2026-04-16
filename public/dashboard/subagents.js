@@ -71,7 +71,7 @@
 		var fm = collectFrontmatter();
 		if (!fm.ok) return false;
 		return currentBody !== state.lastLoadedBody ||
-			JSON.stringify(fm.value) !== JSON.stringify(state.lastLoadedFrontmatter);
+			!ctx.deepEqual(fm.value, state.lastLoadedFrontmatter);
 	}
 
 	function readChipData(id) {
@@ -130,7 +130,19 @@
 		}
 		if (initialPromptEl && initialPromptEl.value.trim()) fm.initialPrompt = initialPromptEl.value.trim();
 		else delete fm.initialPrompt;
-		if (backgroundEl) fm.background = !!backgroundEl.checked;
+		// Only emit background when baseline had it OR the box is checked.
+		// Prevents client adding `background:false` when the server omitted
+		// the key, which flipped dirty-state to always true for every
+		// unchecked subagent (schema-optional field).
+		if (backgroundEl) {
+			var baselineHadBackground = state.lastLoadedFrontmatter &&
+				Object.prototype.hasOwnProperty.call(state.lastLoadedFrontmatter, "background");
+			if (backgroundEl.checked || baselineHadBackground) {
+				fm.background = !!backgroundEl.checked;
+			} else {
+				delete fm.background;
+			}
+		}
 		return { ok: true, value: fm };
 	}
 

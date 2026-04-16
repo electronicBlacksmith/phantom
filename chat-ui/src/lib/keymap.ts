@@ -57,18 +57,6 @@ export const shortcuts: Record<string, Shortcut> = {
     description: "Show keyboard shortcuts",
     category: "global",
   },
-  sidebarNavUp: {
-    key: "k",
-    label: "Previous session",
-    description: "Navigate to previous session in sidebar",
-    category: "sidebar",
-  },
-  sidebarNavDown: {
-    key: "j",
-    label: "Next session",
-    description: "Navigate to next session in sidebar",
-    category: "sidebar",
-  },
 };
 
 export function matchesShortcut(

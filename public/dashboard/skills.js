@@ -27,7 +27,7 @@
 		var fm = collectFrontmatter();
 		if (!fm.ok) return false;
 		return currentBody !== state.lastLoadedBody ||
-			JSON.stringify(fm.value) !== JSON.stringify(state.lastLoadedFrontmatter);
+			!ctx.deepEqual(fm.value, state.lastLoadedFrontmatter);
 	}
 
 	function collectFrontmatter() {
@@ -39,19 +39,36 @@
 		var disableEl = document.getElementById("skill-field-disable");
 		var toolsEl = document.getElementById("skill-field-tools");
 		if (!nameEl) return { ok: false };
-		var name = nameEl.value.trim();
-		var fm = {
-			name: name,
-			description: (descEl.value || "").trim(),
-			when_to_use: (whenEl.value || "").trim(),
-		};
+
+		// Baseline-merge: start from the server-returned frontmatter so
+		// pass-through fields like x-phantom-source survive a round trip
+		// and any future schema additions preserve without a client change.
+		var fm = {};
+		if (state.lastLoadedFrontmatter && typeof state.lastLoadedFrontmatter === "object") {
+			Object.keys(state.lastLoadedFrontmatter).forEach(function (k) {
+				fm[k] = state.lastLoadedFrontmatter[k];
+			});
+		}
+
+		fm.name = nameEl.value.trim();
+		fm.description = (descEl.value || "").trim();
+		fm.when_to_use = (whenEl.value || "").trim();
+
 		var tools = toolsEl ? JSON.parse(toolsEl.getAttribute("data-tools") || "[]") : [];
 		if (tools.length > 0) fm["allowed-tools"] = tools;
+		else delete fm["allowed-tools"];
+
 		var argHint = (argHintEl.value || "").trim();
 		if (argHint) fm["argument-hint"] = argHint;
+		else delete fm["argument-hint"];
+
 		var contextValue = contextEl.value || "";
 		if (contextValue) fm.context = contextValue;
+		else delete fm.context;
+
 		if (disableEl && disableEl.checked) fm["disable-model-invocation"] = true;
+		else delete fm["disable-model-invocation"];
+
 		return { ok: true, value: fm };
 	}
 

@@ -156,7 +156,7 @@ export function startServer(config: PhantomConfig, startedAt: number): ReturnTyp
 
 			if (url.pathname === "/login/email" && req.method === "POST") {
 				const publicUrl = config.public_url ?? `http://localhost:${config.port}`;
-				return handleEmailLogin(req, publicUrl);
+				return handleEmailLogin(req, publicUrl, config.name);
 			}
 
 			if (url.pathname.startsWith("/chat") && chatHandler) {

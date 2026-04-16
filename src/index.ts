@@ -414,6 +414,7 @@ async function main(): Promise<void> {
 		vapidKeys: vapidKeys ?? undefined,
 		focusMap,
 		ownerEmail: process.env.OWNER_EMAIL,
+		agentName: config.name,
 		notificationTriggers: notificationTriggers ?? undefined,
 		getBootstrapData: () => ({
 			agent_name: config.name,

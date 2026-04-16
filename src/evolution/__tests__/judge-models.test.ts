@@ -15,7 +15,7 @@ describe("judge-models constants", () => {
 	});
 
 	test("JUDGE_MODEL_OPUS is the expected Opus id", () => {
-		expect(JUDGE_MODEL_OPUS).toBe("claude-opus-4-6");
+		expect(JUDGE_MODEL_OPUS).toBe("claude-opus-4-7");
 	});
 
 	test("all three tiers resolve to distinct ids", () => {

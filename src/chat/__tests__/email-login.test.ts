@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { revokeAllSessions } from "../../ui/session.ts";
-import { clearRateLimits, handleEmailLogin } from "../email-login.ts";
+import { clearRateLimits, handleEmailLogin, sanitizeLocalPart } from "../email-login.ts";
+import { escapeHtml } from "../util/escape.ts";
 
 const originalEnv = { ...process.env };
 
@@ -30,7 +31,7 @@ function makeRequest(body: Record<string, unknown>, ip = "127.0.0.1"): Request {
 describe("handleEmailLogin", () => {
 	test("returns 200 with neutral response for valid email", async () => {
 		const req = makeRequest({ email: "owner@example.com" });
-		const res = await handleEmailLogin(req, "http://localhost:6666");
+		const res = await handleEmailLogin(req, "http://localhost:6666", "test-agent");
 		expect(res.status).toBe(200);
 		const data = (await res.json()) as { ok: boolean };
 		expect(data.ok).toBe(true);
@@ -38,7 +39,7 @@ describe("handleEmailLogin", () => {
 
 	test("returns 200 with neutral response for invalid email", async () => {
 		const req = makeRequest({ email: "wrong@example.com" });
-		const res = await handleEmailLogin(req, "http://localhost:6666");
+		const res = await handleEmailLogin(req, "http://localhost:6666", "test-agent");
 		expect(res.status).toBe(200);
 		const data = (await res.json()) as { ok: boolean };
 		expect(data.ok).toBe(true);
@@ -47,7 +48,7 @@ describe("handleEmailLogin", () => {
 	test("returns 200 with neutral response when OWNER_EMAIL is unset", async () => {
 		process.env.OWNER_EMAIL = undefined;
 		const req = makeRequest({ email: "someone@example.com" });
-		const res = await handleEmailLogin(req, "http://localhost:6666");
+		const res = await handleEmailLogin(req, "http://localhost:6666", "test-agent");
 		expect(res.status).toBe(200);
 		const data = (await res.json()) as { ok: boolean };
 		expect(data.ok).toBe(true);
@@ -55,7 +56,7 @@ describe("handleEmailLogin", () => {
 
 	test("returns 200 for missing email field", async () => {
 		const req = makeRequest({});
-		const res = await handleEmailLogin(req, "http://localhost:6666");
+		const res = await handleEmailLogin(req, "http://localhost:6666", "test-agent");
 		expect(res.status).toBe(200);
 	});
 
@@ -68,33 +69,86 @@ describe("handleEmailLogin", () => {
 			},
 			body: "not json",
 		});
-		const res = await handleEmailLogin(req, "http://localhost:6666");
+		const res = await handleEmailLogin(req, "http://localhost:6666", "test-agent");
 		expect(res.status).toBe(200);
 	});
 
 	test("rate limits to 1 per 60 seconds per IP", async () => {
 		// First request succeeds (triggers rate limit regardless of match)
 		const req1 = makeRequest({ email: "owner@example.com" }, "10.0.0.1");
-		const res1 = await handleEmailLogin(req1, "http://localhost:6666");
+		const res1 = await handleEmailLogin(req1, "http://localhost:6666", "test-agent");
 		expect(res1.status).toBe(200);
 
 		// Second request from same IP within 60 seconds
 		const req2 = makeRequest({ email: "owner@example.com" }, "10.0.0.1");
-		const res2 = await handleEmailLogin(req2, "http://localhost:6666");
+		const res2 = await handleEmailLogin(req2, "http://localhost:6666", "test-agent");
 		expect(res2.status).toBe(200);
 		// Still returns ok (neutral), but it was rate-limited internally
 
 		// Different IP is not rate-limited
 		const req3 = makeRequest({ email: "owner@example.com" }, "10.0.0.2");
-		const res3 = await handleEmailLogin(req3, "http://localhost:6666");
+		const res3 = await handleEmailLogin(req3, "http://localhost:6666", "test-agent");
 		expect(res3.status).toBe(200);
 	});
 
 	test("normalizes email comparison to lowercase", async () => {
 		const req = makeRequest({ email: "OWNER@Example.COM" });
-		const res = await handleEmailLogin(req, "http://localhost:6666");
+		const res = await handleEmailLogin(req, "http://localhost:6666", "test-agent");
 		expect(res.status).toBe(200);
 		const data = (await res.json()) as { ok: boolean };
 		expect(data.ok).toBe(true);
+	});
+});
+
+describe("sanitizeLocalPart", () => {
+	test("lowercases alphanumerics", () => {
+		expect(sanitizeLocalPart("Phantom")).toBe("phantom");
+	});
+
+	test("collapses spaces to hyphens", () => {
+		expect(sanitizeLocalPart("My Agent")).toBe("my-agent");
+	});
+
+	test("collapses underscores and dots to hyphens", () => {
+		expect(sanitizeLocalPart("my_agent.name")).toBe("my-agent-name");
+	});
+
+	test("collapses runs of hyphens and trims edges", () => {
+		expect(sanitizeLocalPart("  my   agent  ")).toBe("my-agent");
+	});
+
+	test("strips anything non-alphanumeric and non-hyphen", () => {
+		expect(sanitizeLocalPart("Agent!@#$%^&*()")).toBe("agent");
+	});
+
+	test("falls back to 'agent' when sanitized to empty", () => {
+		expect(sanitizeLocalPart("!@#$%")).toBe("agent");
+		expect(sanitizeLocalPart("")).toBe("agent");
+	});
+
+	test("falls back to 'agent' when sanitized result is shorter than 3 chars", () => {
+		expect(sanitizeLocalPart("A")).toBe("agent");
+		expect(sanitizeLocalPart("ab")).toBe("agent");
+	});
+
+	test("preserves 3+ char alphanumeric names", () => {
+		expect(sanitizeLocalPart("abc")).toBe("abc");
+		expect(sanitizeLocalPart("xyz123")).toBe("xyz123");
+	});
+
+	test("handles CRLF in input (stripped as non-alphanumeric)", () => {
+		expect(sanitizeLocalPart("agent\r\n.name")).toBe("agent-name");
+	});
+});
+
+describe("escapeHtml", () => {
+	test("escapes the five HTML-significant characters", () => {
+		expect(escapeHtml("<img src=x onerror=alert(1)>")).toBe("&lt;img src=x onerror=alert(1)&gt;");
+		expect(escapeHtml("a \"b\" & 'c'")).toBe("a &quot;b&quot; &amp; &#39;c&#39;");
+	});
+
+	test("leaves safe text unchanged", () => {
+		expect(escapeHtml("Phantom")).toBe("Phantom");
+		expect(escapeHtml("my-agent")).toBe("my-agent");
 	});
 });

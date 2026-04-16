@@ -1,18 +1,11 @@
-import { useEffect, useState } from "react";
-import { getBootstrap, type BootstrapData } from "@/lib/client";
+import { useBootstrap } from "@/hooks/use-bootstrap";
 
 export function EmptyState({
   onSuggestionClick,
 }: {
   onSuggestionClick: (text: string) => void;
 }) {
-  const [data, setData] = useState<BootstrapData | null>(null);
-
-  useEffect(() => {
-    getBootstrap()
-      .then(setData)
-      .catch(() => {});
-  }, []);
+  const { data, cachedName, cachedGen } = useBootstrap();
 
   const defaultSuggestions = [
     "What can you do?",
@@ -25,6 +18,9 @@ export function EmptyState({
     ? data.suggestions
     : defaultSuggestions;
 
+  const agentName = data?.agent_name ?? cachedName ?? "Agent";
+  const evolutionGen = data?.evolution_gen ?? cachedGen ?? 0;
+
   return (
     <div className="flex h-full flex-col items-center justify-center px-4">
       <div className="max-w-2xl text-center">
@@ -32,10 +28,8 @@ export function EmptyState({
           What can I help you with?
         </h1>
         <p className="mt-4 text-base text-muted-foreground">
-          {data?.agent_name ?? "Phantom"} is ready to help.
-          {data?.evolution_gen != null && data.evolution_gen > 0
-            ? ` Generation ${data.evolution_gen}.`
-            : ""}
+          {agentName} is ready to help.
+          {evolutionGen > 0 ? ` Generation ${evolutionGen}.` : ""}
         </p>
       </div>
 

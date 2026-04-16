@@ -168,7 +168,7 @@ ENDSSH
 Check the logs from Step 6 output. You should see:
 
 ```
-[phantom] Config loaded: <name> (claude-opus-4-6, effort: max)
+[phantom] Config loaded: <name> (claude-opus-4-7, effort: max)
 [roles] Loaded role: Software Engineer (swe)
 [phantom] Database ready
 [memory] Memory system initialized successfully.

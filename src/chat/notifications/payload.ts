@@ -92,9 +92,13 @@ export function hardErrorPayload(sessionId: string, error: string): Notification
 	});
 }
 
-export function testPayload(): NotificationPayload {
+export function testPayload(agentName?: string): NotificationPayload {
+	// Title clearly labels this as a test so users do not mistake the
+	// notification for a real message. Without "test" in the title the
+	// notification read "Cheema: Push notifications are working" which
+	// looked like a real agent message at a glance.
 	return {
-		title: "Phantom",
+		title: agentName && agentName.length > 0 ? `${agentName} test` : "Test notification",
 		body: "Push notifications are working",
 		tag: "test-notification",
 		data: {
