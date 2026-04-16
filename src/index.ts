@@ -225,7 +225,7 @@ async function main(): Promise<void> {
 		// Wire scheduler into the agent (Slack channel set later after channel init)
 		scheduler = new Scheduler({ db, runtime });
 		setSchedulerHealthProvider(() => scheduler?.getHealthSummary() ?? null);
-		setSchedulerInstance(scheduler);
+		setSchedulerInstance(scheduler, runtime);
 
 		// Pass factories (not singletons) so each query() gets fresh MCP server instances.
 		// The underlying registries (DynamicToolRegistry, Scheduler) are singletons.

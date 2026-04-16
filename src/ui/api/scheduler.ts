@@ -20,11 +20,13 @@
 //
 // CARDINAL RULE: the /parse endpoint fills a form. The operator reviews and
 // edits the proposal before calling POST /ui/api/scheduler. Sonnet never
-// drives the agent at run time. See src/scheduler/parse-with-sonnet.ts for
-// the full comment.
+// drives the agent at run time. Uses the Agent SDK subprocess so the
+// operator's existing auth (Claude subscription or ANTHROPIC_API_KEY) carries
+// through. See src/scheduler/parse-with-sonnet.ts for the full comment.
 
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
+import type { AgentRuntime } from "../../agent/runtime.ts";
 import { humanReadableSchedule } from "../../scheduler/human.ts";
 import { type ParseResult, parseJobDescription } from "../../scheduler/parse-with-sonnet.ts";
 import { computeNextRunAt, validateSchedule } from "../../scheduler/schedule.ts";
@@ -35,9 +37,10 @@ import type { JobCreateInput } from "../../scheduler/types.ts";
 export type SchedulerApiDeps = {
 	db: Database;
 	scheduler: Scheduler;
-	// Test seam so the parse endpoint can be exercised without a real
-	// Anthropic API key. Production wiring omits this and falls back to
-	// parseJobDescription with the env var.
+	runtime?: AgentRuntime | null;
+	// Test seam so the parse endpoint can be exercised without spawning a
+	// subprocess. Production wiring leaves this undefined and the handler
+	// falls back to parseJobDescription with the runtime.
 	parser?: (description: string) => Promise<ParseResult>;
 };
 
@@ -240,8 +243,9 @@ async function handleParse(req: Request, deps: SchedulerApiDeps): Promise<Respon
 	const body = await parseJsonBody(req, DescribeSchema);
 	if (!body.ok) return errJson(body.error, body.status);
 
-	const parse = deps.parser ?? parseJobDescription;
-	const result = await parse(body.value.description);
+	const result = deps.parser
+		? await deps.parser(body.value.description)
+		: await parseJobDescription(body.value.description, { runtime: deps.runtime ?? null });
 	if (result.ok) {
 		return json({ proposal: result.proposal, warnings: result.warnings });
 	}

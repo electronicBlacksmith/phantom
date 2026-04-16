@@ -62,7 +62,7 @@
 			open: false, appliedTemplate: null, form: defaultForm(), dirtyByUser: false,
 			preview: null, previewError: null, previewPending: false,
 			submitting: false, submitError: null,
-			describeText: "", describeFilled: false, describePending: false, describeError: null, describeDisabled: false,
+			describeText: "", describeFilled: false, describePending: false, describeError: null,
 			errors: {},
 		};
 	}
@@ -667,7 +667,6 @@
 	}
 
 	function renderDescribe() {
-		if (state.create.describeDisabled) return "";
 		var c = state.create;
 		var count = c.describeText.length, over = count > DESCRIBE_MAX;
 		var banner = c.describeFilled
@@ -1019,13 +1018,7 @@
 			schedulePreview();
 		}).catch(function (err) {
 			state.create.describePending = false;
-			if (err.status === 503) {
-				state.create.describeDisabled = true;
-				state.create.describeError = null;
-				ctx.toast("error", "Describe assist unavailable", "Set ANTHROPIC_API_KEY to enable this.");
-			} else {
-				state.create.describeError = err.message || "Could not parse description, please fill the form manually.";
-			}
+			state.create.describeError = err.message || "Could not parse description, please fill the form manually.";
 			renderCreateDrawer();
 		});
 	}

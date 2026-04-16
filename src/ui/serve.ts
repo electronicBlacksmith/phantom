@@ -5,6 +5,7 @@ import { createSSEResponse } from "./events.ts";
 import { loginPageHtml } from "./login-page.ts";
 import { consumeMagicLink, createSession, isValidSession } from "./session.ts";
 
+import type { AgentRuntime } from "../agent/runtime.ts";
 import type { ParseResult } from "../scheduler/parse-with-sonnet.ts";
 import type { Scheduler } from "../scheduler/service.ts";
 import { secretsExpiredHtml, secretsFormHtml } from "../secrets/form-page.ts";
@@ -27,6 +28,7 @@ let secretsDb: Database | null = null;
 let dashboardDb: Database | null = null;
 let bootstrapDb: Database | null = null;
 let schedulerInstance: Scheduler | null = null;
+let schedulerRuntime: AgentRuntime | null = null;
 let schedulerParserOverride: ((description: string) => Promise<ParseResult>) | null = null;
 let pluginsApiOverrides: Pick<PluginsApiDeps, "fetcher" | "settingsPath" | "overlayPath"> = {};
 
@@ -45,12 +47,14 @@ export function setDashboardDb(db: Database): void {
 	dashboardDb = db;
 }
 
-export function setSchedulerInstance(scheduler: Scheduler): void {
+export function setSchedulerInstance(scheduler: Scheduler, runtime?: AgentRuntime): void {
 	schedulerInstance = scheduler;
+	if (runtime) schedulerRuntime = runtime;
 }
 
 export function clearSchedulerInstanceForTests(): void {
 	schedulerInstance = null;
+	schedulerRuntime = null;
 	schedulerParserOverride = null;
 }
 
@@ -259,6 +263,7 @@ export async function handleUiRequest(req: Request): Promise<Response> {
 		const apiResponse = await handleSchedulerApi(req, url, {
 			db: dashboardDb,
 			scheduler: schedulerInstance,
+			runtime: schedulerRuntime,
 			...(schedulerParserOverride ? { parser: schedulerParserOverride } : {}),
 		});
 		if (apiResponse) return apiResponse;

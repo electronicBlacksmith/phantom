@@ -394,28 +394,11 @@ describe("scheduler API", () => {
 		expect(res.status).toBe(422);
 	});
 
-	test("POST /parse surfaces 503 when ANTHROPIC_API_KEY is missing", async () => {
+	test("POST /parse collapses subprocess failures to 422", async () => {
 		setSchedulerParserOverrideForTests((async () => ({
 			ok: false as const,
-			status: 503 as const,
-			error: "Sonnet assist requires ANTHROPIC_API_KEY.",
-		})) as never);
-		const res = await handleUiRequest(
-			req("/ui/api/scheduler/parse", {
-				method: "POST",
-				body: JSON.stringify({ description: "pull HN stories" }),
-			}),
-		);
-		expect(res.status).toBe(503);
-		const body = (await res.json()) as { error: string };
-		expect(body.error).toContain("ANTHROPIC_API_KEY");
-	});
-
-	test("POST /parse surfaces 504 on timeout", async () => {
-		setSchedulerParserOverrideForTests((async () => ({
-			ok: false as const,
-			status: 504 as const,
-			error: "Sonnet assist timed out, please fill the form manually.",
+			status: 422 as const,
+			error: "Could not parse description, please fill the form manually.",
 		})) as never);
 		const res = await handleUiRequest(
 			req("/ui/api/scheduler/parse", {
@@ -423,7 +406,9 @@ describe("scheduler API", () => {
 				body: JSON.stringify({ description: "something" }),
 			}),
 		);
-		expect(res.status).toBe(504);
+		expect(res.status).toBe(422);
+		const body = (await res.json()) as { error: string };
+		expect(body.error).toContain("Could not parse");
 	});
 
 	test("POST /parse rejects empty description with 400", async () => {
