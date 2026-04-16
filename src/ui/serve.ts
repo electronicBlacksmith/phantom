@@ -5,12 +5,15 @@ import { createSSEResponse } from "./events.ts";
 import { loginPageHtml } from "./login-page.ts";
 import { consumeMagicLink, createSession, isValidSession } from "./session.ts";
 
+import type { ParseResult } from "../scheduler/parse-with-sonnet.ts";
+import type { Scheduler } from "../scheduler/service.ts";
 import { secretsExpiredHtml, secretsFormHtml } from "../secrets/form-page.ts";
 import { getSecretRequest, saveSecrets, validateMagicToken } from "../secrets/store.ts";
 import { handleCostApi } from "./api/cost.ts";
 import { handleHooksApi } from "./api/hooks.ts";
 import { handleMemoryFilesApi } from "./api/memory-files.ts";
 import { type PluginsApiDeps, handlePluginsApi } from "./api/plugins.ts";
+import { handleSchedulerApi } from "./api/scheduler.ts";
 import { handleSessionsApi } from "./api/sessions.ts";
 import { handleSettingsApi } from "./api/settings.ts";
 import { handleSkillsApi } from "./api/skills.ts";
@@ -23,6 +26,8 @@ let publicDir = resolve(process.cwd(), "public");
 let secretsDb: Database | null = null;
 let dashboardDb: Database | null = null;
 let bootstrapDb: Database | null = null;
+let schedulerInstance: Scheduler | null = null;
+let schedulerParserOverride: ((description: string) => Promise<ParseResult>) | null = null;
 let pluginsApiOverrides: Pick<PluginsApiDeps, "fetcher" | "settingsPath" | "overlayPath"> = {};
 
 type SecretSavedCallback = (requestId: string, secretNames: string[]) => Promise<void>;
@@ -38,6 +43,21 @@ export function setSecretsDb(db: Database): void {
 
 export function setDashboardDb(db: Database): void {
 	dashboardDb = db;
+}
+
+export function setSchedulerInstance(scheduler: Scheduler): void {
+	schedulerInstance = scheduler;
+}
+
+export function clearSchedulerInstanceForTests(): void {
+	schedulerInstance = null;
+	schedulerParserOverride = null;
+}
+
+// Test-only seam. Production wiring leaves this null so the handler falls
+// back to the default parseJobDescription (Anthropic SDK + env var).
+export function setSchedulerParserOverrideForTests(fn: (description: string) => Promise<ParseResult>): void {
+	schedulerParserOverride = fn;
 }
 
 // Test-only seam. Production wiring leaves these undefined and the plugins
@@ -227,6 +247,20 @@ export async function handleUiRequest(req: Request): Promise<Response> {
 			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
 		}
 		const apiResponse = await handleCostApi(req, url, { db: dashboardDb });
+		if (apiResponse) return apiResponse;
+	}
+	if (url.pathname.startsWith("/ui/api/scheduler")) {
+		if (!dashboardDb) {
+			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
+		}
+		if (!schedulerInstance) {
+			return Response.json({ error: "Scheduler not initialized" }, { status: 503 });
+		}
+		const apiResponse = await handleSchedulerApi(req, url, {
+			db: dashboardDb,
+			scheduler: schedulerInstance,
+			...(schedulerParserOverride ? { parser: schedulerParserOverride } : {}),
+		});
 		if (apiResponse) return apiResponse;
 	}
 
