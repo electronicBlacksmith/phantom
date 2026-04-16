@@ -10,6 +10,7 @@ import { getSecretRequest, saveSecrets, validateMagicToken } from "../secrets/st
 import { handleHooksApi } from "./api/hooks.ts";
 import { handleMemoryFilesApi } from "./api/memory-files.ts";
 import { type PluginsApiDeps, handlePluginsApi } from "./api/plugins.ts";
+import { handleSessionsApi } from "./api/sessions.ts";
 import { handleSettingsApi } from "./api/settings.ts";
 import { handleSkillsApi } from "./api/skills.ts";
 import { handleSubagentsApi } from "./api/subagents.ts";
@@ -211,6 +212,13 @@ export async function handleUiRequest(req: Request): Promise<Response> {
 			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
 		}
 		const apiResponse = await handleSettingsApi(req, url, { db: dashboardDb });
+		if (apiResponse) return apiResponse;
+	}
+	if (url.pathname.startsWith("/ui/api/sessions")) {
+		if (!dashboardDb) {
+			return Response.json({ error: "Dashboard API not initialized" }, { status: 503 });
+		}
+		const apiResponse = await handleSessionsApi(req, url, { db: dashboardDb });
 		if (apiResponse) return apiResponse;
 	}
 
