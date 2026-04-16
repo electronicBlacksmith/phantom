@@ -70,8 +70,8 @@ RUN DPKG_ARCH=$(dpkg --print-architecture) && \
 # Claude Code CLI refuses --dangerously-skip-permissions when running as root,
 # so the container MUST run as a non-root user. Docker socket access is granted
 # via group_add in docker-compose.yaml (matching the host's docker GID).
-RUN groupadd --system phantom && \
-    useradd --system --gid phantom --create-home --home-dir /home/phantom phantom && \
+RUN groupadd --system --gid 999 phantom && \
+    useradd --system --uid 999 --gid phantom --create-home --home-dir /home/phantom phantom && \
     mkdir -p /home/phantom/.claude && \
     chown -R phantom:phantom /home/phantom
 
