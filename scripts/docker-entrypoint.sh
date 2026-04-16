@@ -54,11 +54,12 @@ fi
 # Image-owned files (chat-ui SPA, base template) must refresh from the new image.
 if [ -d /app/public-defaults ]; then
   echo "[phantom] Syncing public assets from image..."
+  rm -rf /app/public/chat 2>/dev/null || true
   cp -r /app/public-defaults/chat /app/public/chat 2>/dev/null || true
   for f in _base.html _components.html _agent-name.js index.html phantom-logo.svg; do
     [ -f "/app/public-defaults/$f" ] && cp "/app/public-defaults/$f" "/app/public/$f"
   done
-  [ -d /app/public-defaults/_examples ] && cp -r /app/public-defaults/_examples /app/public/_examples
+  [ -d /app/public-defaults/_examples ] && rm -rf /app/public/_examples && cp -r /app/public-defaults/_examples /app/public/_examples
   chown -R 999:999 /app/public 2>/dev/null || true
   echo "[phantom] Public assets synced"
 fi
