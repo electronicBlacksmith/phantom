@@ -69,33 +69,35 @@ export function handleAssistant(msg: Record<string, unknown>, ctx: TranslationCo
 				ctx.seenBlockLengths.set(i, fullText.length);
 			}
 		} else if (blockType === "thinking" || blockType === "redacted_thinking") {
+			// Thinking blocks use a Map-indirect client reducer: `thinking_start`
+			// REPLACES the Map entry, and `thinking_delta` appends to it. That
+			// makes `thinking_start + thinking_delta(fullText)` idempotent across
+			// the streamed and non-streamed paths, AND correctly snaps the
+			// client's Map entry to the canonical text when the stream deltas
+			// diverged from the final assistant text (e.g. stream="abc",
+			// final="abcd"). So we always emit on the final pass. The text path
+			// above uses a dedicated reconcile frame because its reducer is
+			// array-of-blocks and that idempotence guarantee does not hold there.
 			const thinkingText = (block.thinking as string) ?? "";
-			if (ctx.blockTypes.get(i) === "thinking") {
-				// Stream deltas already shipped this block via Map.set-idempotent
-				// updates in the client reducer. Skip redundant emission; the
-				// Map entry already holds the authoritative text.
-				ctx.seenBlockLengths.set(i, thinkingText.length);
-			} else {
-				const prevLen = ctx.seenBlockLengths.get(i) ?? 0;
-				const redacted = blockType === "redacted_thinking";
-				if (prevLen === 0) {
-					frames.push({
-						event: "message.thinking_start",
-						message_id: ctx.messageId,
-						thinking_block_id: `tk_${ctx.turnIndex}_${i}`,
-						index: i,
-						redacted,
-					});
-				}
-				if (!redacted && thinkingText.length > prevLen) {
-					frames.push({
-						event: "message.thinking_delta",
-						thinking_block_id: `tk_${ctx.turnIndex}_${i}`,
-						delta: thinkingText.slice(prevLen),
-					});
-				}
-				ctx.seenBlockLengths.set(i, thinkingText.length);
+			const prevLen = ctx.seenBlockLengths.get(i) ?? 0;
+			const redacted = blockType === "redacted_thinking";
+			if (prevLen === 0) {
+				frames.push({
+					event: "message.thinking_start",
+					message_id: ctx.messageId,
+					thinking_block_id: `tk_${ctx.turnIndex}_${i}`,
+					index: i,
+					redacted,
+				});
 			}
+			if (!redacted && thinkingText.length > prevLen) {
+				frames.push({
+					event: "message.thinking_delta",
+					thinking_block_id: `tk_${ctx.turnIndex}_${i}`,
+					delta: thinkingText.slice(prevLen),
+				});
+			}
+			ctx.seenBlockLengths.set(i, thinkingText.length);
 		} else if (blockType === "tool_use") {
 			const toolId = (block.id as string) ?? `tool_${i}`;
 			if (!ctx.startedToolIds.has(toolId)) {

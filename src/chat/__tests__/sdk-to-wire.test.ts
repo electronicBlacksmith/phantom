@@ -536,7 +536,7 @@ describe("sdk-to-wire translator", () => {
 		expect(frames.some((f) => f.event === "message.text_reconcile")).toBe(false);
 	});
 
-	test("stream_event + assistant combined: thinking block emits no redundant frames", () => {
+	test("stream_event + assistant combined: thinking final emits start+delta(fullText) which the Map-indirect client reducer replaces idempotently", () => {
 		const ctx = makeCtx();
 		translateSdkMessage(
 			{
@@ -566,7 +566,52 @@ describe("sdk-to-wire translator", () => {
 			},
 			ctx,
 		);
-		expect(frames.length).toBe(0);
+		expect(frames.length).toBe(2);
+		expect(frames[0].event).toBe("message.thinking_start");
+		expect(frames[1].event).toBe("message.thinking_delta");
+		if (frames[1].event === "message.thinking_delta") {
+			expect(frames[1].delta).toBe("Let me think");
+		}
+	});
+
+	test("stream_event + assistant combined: thinking final snaps to canonical when deltas diverge (stream='abc', final='abcd')", () => {
+		const ctx = makeCtx();
+		translateSdkMessage(
+			{
+				type: "stream_event",
+				event: { type: "content_block_start", content_block: { type: "thinking" }, index: 0 },
+				parent_tool_use_id: null,
+			},
+			ctx,
+		);
+		translateSdkMessage(
+			{
+				type: "stream_event",
+				event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "abc" }, index: 0 },
+				parent_tool_use_id: null,
+			},
+			ctx,
+		);
+		translateSdkMessage(
+			{ type: "stream_event", event: { type: "content_block_stop", index: 0 }, parent_tool_use_id: null },
+			ctx,
+		);
+		const frames = translateSdkMessage(
+			{
+				type: "assistant",
+				message: { content: [{ type: "thinking", thinking: "abcd" }] },
+				parent_tool_use_id: null,
+			},
+			ctx,
+		);
+		// thinking_start replaces the client's Map entry, thinking_delta fills
+		// with the canonical "abcd". The "d" missing from the stream is restored.
+		expect(frames.length).toBe(2);
+		expect(frames[0].event).toBe("message.thinking_start");
+		expect(frames[1].event).toBe("message.thinking_delta");
+		if (frames[1].event === "message.thinking_delta") {
+			expect(frames[1].delta).toBe("abcd");
+		}
 	});
 
 	test("stream_event + assistant combined: tool_use block still guarded by startedToolIds", () => {
