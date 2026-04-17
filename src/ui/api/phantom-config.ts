@@ -95,18 +95,36 @@ async function parseJsonBody<T>(
 	return { ok: true, value: parsed.data };
 }
 
+// Known secret-shape prefixes. Defense in depth: the UI schema already rejects
+// secret field names via .strict(), but an operator could still paste a token
+// into a free-form field (name, role, domain). Redact the literal token from
+// the audit before persisting so a screen-share of the history pane does not
+// leak API keys or bot tokens.
+const SECRET_PATTERN =
+	/\b(sk-ant-[\w-]+|sk-[\w-]{20,}|xoxb-[\w-]+|xoxp-[\w-]+|xapp-[\w-]+|ghp_[\w]+|gho_[\w]+|ghu_[\w]+|ghs_[\w]+|ghr_[\w]+|bot\d+:[\w-]+)/g;
+
+function redactSecretShapes(value: unknown): unknown {
+	if (typeof value === "string") return value.replace(SECRET_PATTERN, "[redacted]");
+	if (Array.isArray(value)) return value.map(redactSecretShapes);
+	if (value && typeof value === "object") {
+		const out: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(value)) out[k] = redactSecretShapes(v);
+		return out;
+	}
+	return value;
+}
+
+function serializeAuditValue(value: unknown): string | null {
+	if (value === undefined) return null;
+	return JSON.stringify(redactSecretShapes(value));
+}
+
 function recordAuditRows(db: Database, changes: AppliedChange[], actor: string): void {
 	for (const change of changes) {
 		db.run(
 			`INSERT INTO settings_audit_log (field, previous_value, new_value, actor, section)
 			 VALUES (?, ?, ?, ?, ?)`,
-			[
-				change.field,
-				change.previous === undefined ? null : JSON.stringify(change.previous),
-				change.next === undefined ? null : JSON.stringify(change.next),
-				actor,
-				change.section,
-			],
+			[change.field, serializeAuditValue(change.previous), serializeAuditValue(change.next), actor, change.section],
 		);
 	}
 }
@@ -187,11 +205,18 @@ async function handlePut(req: Request, deps: PhantomConfigApiDeps, paths: Phanto
 		return json({ config: current, dirty_keys: [] });
 	}
 
-	// Read the memory.yaml once more so the atomic write preserves every
-	// field we do not own (collections, embedding dims, context.max_tokens).
-	const memRes = readYamlFile("config/memory.yaml");
-	if (!memRes.ok) return errJson(memRes.error, 500);
-	const plan = planWrites(loaded.value, merged, memRes.value);
+	// Only read memory.yaml when the patch actually touches the memory section.
+	// Otherwise a malformed memory.yaml would 500 unrelated saves (identity,
+	// model, permissions) and brick the dashboard for fields that have nothing
+	// to do with memory.
+	const memoryChanged = changes.some((c) => c.section === "memory");
+	let memorySource: Record<string, unknown> | null = null;
+	if (memoryChanged) {
+		const memRes = readYamlFile("config/memory.yaml");
+		if (!memRes.ok) return errJson(memRes.error, 500);
+		memorySource = (memRes.value ?? null) as Record<string, unknown> | null;
+	}
+	const plan = planWrites(loaded.value, merged, memorySource);
 
 	// Write order: phantom.yaml first (identity, cost, permissions, evolution
 	// mirror). If that succeeds, channels, memory, evolution overlay.
@@ -208,7 +233,6 @@ async function handlePut(req: Request, deps: PhantomConfigApiDeps, paths: Phanto
 		if (!res.ok) return errJson(res.error, 500);
 	}
 
-	const memoryChanged = changes.some((c) => c.section === "memory");
 	if (memoryChanged) {
 		const memText = stringifyYaml(plan.memory, { lineWidth: 120 });
 		const res = writeAtomic("config/memory.yaml", memText, deps.renameImpl);

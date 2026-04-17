@@ -516,4 +516,61 @@ describe("phantom-config API", () => {
 		const res = await handleUiRequest(req("/ui/api/phantom-config", { method: "PUT", body: "{ not json" }));
 		expect(res.status).toBe(400);
 	});
+
+	test("Non-memory PUT does not read memory.yaml (tolerates a malformed memory.yaml)", async () => {
+		// Corrupt memory.yaml. A non-memory save (e.g. model) must still succeed
+		// and not brick unrelated fields just because memory.yaml is broken.
+		writeFileSync(memoryYamlRealPath, "{{ absolutely: not yaml {{", "utf-8");
+		const res = await handleUiRequest(
+			req("/ui/api/phantom-config", {
+				method: "PUT",
+				body: JSON.stringify({ model: "claude-sonnet-4-6" }),
+			}),
+		);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { config: { model: string } };
+		expect(body.config.model).toBe("claude-sonnet-4-6");
+	});
+
+	test("Memory PUT DOES read memory.yaml and surfaces parse failure as 500", async () => {
+		writeFileSync(memoryYamlRealPath, "{{ absolutely: not yaml {{", "utf-8");
+		const res = await handleUiRequest(
+			req("/ui/api/phantom-config", {
+				method: "PUT",
+				body: JSON.stringify({ memory: { episode_limit: 25 } }),
+			}),
+		);
+		expect(res.status).toBe(500);
+	});
+
+	test("Audit redacts secret-shape strings pasted into free-form fields", async () => {
+		await handleUiRequest(
+			req("/ui/api/phantom-config", {
+				method: "PUT",
+				body: JSON.stringify({ role: "leaked sk-ant-api03-deadbeefabcdef0123456789 role" }),
+			}),
+		);
+		const rows = db
+			.query("SELECT new_value FROM settings_audit_log WHERE field = ? ORDER BY id DESC LIMIT 1")
+			.all("role") as Array<{ new_value: string }>;
+		expect(rows.length).toBe(1);
+		const logged = rows[0].new_value;
+		expect(logged.includes("sk-ant-api03-deadbeef")).toBe(false);
+		expect(logged.includes("[redacted]")).toBe(true);
+	});
+
+	test("Audit redacts Slack bot tokens pasted into free-form fields", async () => {
+		await handleUiRequest(
+			req("/ui/api/phantom-config", {
+				method: "PUT",
+				body: JSON.stringify({ role: "do not paste xoxb-123456789012-abcdefghij here" }),
+			}),
+		);
+		const rows = db
+			.query("SELECT new_value FROM settings_audit_log WHERE field = ? ORDER BY id DESC LIMIT 1")
+			.all("role") as Array<{ new_value: string }>;
+		const logged = rows[0].new_value;
+		expect(logged.includes("xoxb-123456789012")).toBe(false);
+		expect(logged.includes("[redacted]")).toBe(true);
+	});
 });

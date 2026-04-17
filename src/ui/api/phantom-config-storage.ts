@@ -324,7 +324,11 @@ export type WritePlan = {
 export function planWrites(
 	previous: LoadedConfig,
 	merged: PhantomConfigForUi,
-	memoryBefore: Record<string, unknown>,
+	// memoryBefore may be null when the caller skipped the memory.yaml read
+	// because the patch does not touch memory. The resulting plan.memory is
+	// unused in that case (the caller gates the write on changes), so we
+	// return a minimal object to satisfy the WritePlan shape.
+	memoryBefore: Record<string, unknown> | null,
 ): WritePlan {
 	const phantom: Record<string, unknown> = { ...previous.phantom };
 	phantom.name = merged.name;
@@ -351,7 +355,7 @@ export function planWrites(
 		channels[ch] = { ...existing, enabled: merged.channels[ch].enabled };
 	}
 
-	const memory: Record<string, unknown> = { ...memoryBefore };
+	const memory: Record<string, unknown> = memoryBefore ? { ...memoryBefore } : {};
 	memory.qdrant = { ...((memory.qdrant as Record<string, unknown> | undefined) ?? {}), url: merged.memory.qdrant_url };
 	memory.ollama = {
 		...((memory.ollama as Record<string, unknown> | undefined) ?? {}),

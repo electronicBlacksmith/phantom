@@ -39,14 +39,14 @@
 		{
 			key: "model_cost",
 			title: "Model and cost",
-			help: "Which model the agent uses, how hard it thinks, and the ceiling on spend. Live on the next message.",
-			saveLabel: "Save",
+			help: "Which model the agent uses, how hard it thinks, and the ceiling on spend. Restart required for changes to take effect.",
+			saveLabel: "Save (restart required)",
 		},
 		{
 			key: "evolution",
 			title: "Evolution",
-			help: "Cadence of the self-evolution reflection loop. Cadence and demand depth live-reload; the enable switch needs a restart.",
-			saveLabel: "Save",
+			help: "Cadence of the self-evolution reflection loop. Saved to phantom.yaml; restart required for the running engine to pick up new values.",
+			saveLabel: "Save (restart required)",
 		},
 		{
 			key: "channels",
@@ -57,8 +57,8 @@
 		{
 			key: "memory",
 			title: "Memory",
-			help: "Qdrant and Ollama endpoints plus per-query context limits. URL changes require restart; limits live-reload.",
-			saveLabel: "Save",
+			help: "Qdrant and Ollama endpoints plus per-query context limits. Restart required for changes to take effect.",
+			saveLabel: "Save (restart required)",
 		},
 		{
 			key: "permissions",
@@ -412,7 +412,7 @@
 				'Cadence (minutes)',
 				numberInputHtml("cadence_minutes", d.cadence_minutes, "evolution", 1, 10080, "1") +
 					'<div style="margin-top: var(--space-2); display: flex; flex-wrap: wrap; gap: 6px;">' + presetChips + '</div>',
-				'How often the evolution queue drains and reflection runs. Saves to <code>phantom-config/meta/evolution.json</code> and takes effect on the next tick.',
+				'How often the evolution queue drains and reflection runs. Saves to <code>phantom-config/meta/evolution.json</code>; restart required for the running cadence to pick up the new value.',
 				"err-evolution-cadence_minutes"
 			) +
 			fieldBlock(
