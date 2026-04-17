@@ -12,21 +12,18 @@ const PREFILL_MAX = 2000;
 // is a consent surface, not an auto-run.
 function readPrefill(): string | null {
   if (typeof window === "undefined") return null;
-  const raw = new URLSearchParams(window.location.search).get("prefill");
-  if (raw === null) return null;
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(raw);
-  } catch {
-    decoded = raw;
-  }
-  if (decoded.length > PREFILL_MAX) {
+  // URLSearchParams.get() already percent-decodes. Calling decodeURIComponent
+  // on top would double-decode and silently corrupt literal %xx substrings in
+  // operator-authored prompts (e.g. "Fetch a %20 file" would lose the %20).
+  let value = new URLSearchParams(window.location.search).get("prefill");
+  if (value === null) return null;
+  if (value.length > PREFILL_MAX) {
     console.warn(
-      `[chat] prefill truncated from ${decoded.length} to ${PREFILL_MAX} chars`,
+      `[chat] prefill truncated from ${value.length} to ${PREFILL_MAX} chars`,
     );
-    decoded = decoded.slice(0, PREFILL_MAX - 1) + "\u2026";
+    value = value.slice(0, PREFILL_MAX - 1) + "\u2026";
   }
-  return decoded;
+  return value;
 }
 
 export function ChatRoute() {
