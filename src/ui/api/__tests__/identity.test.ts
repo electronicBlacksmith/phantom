@@ -113,7 +113,10 @@ async function postAvatar(
 	opts: { cookie?: boolean; contentLength?: number | null } = {},
 ): Promise<Response> {
 	const form = new FormData();
-	const blob = new Blob([bytes], { type: mime });
+	// Create a fresh ArrayBuffer-backed view so Blob's BlobPart typing accepts it.
+	const buf = new ArrayBuffer(bytes.byteLength);
+	new Uint8Array(buf).set(bytes);
+	const blob = new Blob([buf], { type: mime });
 	form.append("file", blob, filename);
 	const headers: Record<string, string> = opts.cookie === false ? {} : authHeaders();
 	if (opts.contentLength != null) {
