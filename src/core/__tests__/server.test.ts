@@ -1,8 +1,11 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import YAML from "yaml";
 import { hashTokenSync } from "../../mcp/config.ts";
 import type { McpConfig } from "../../mcp/types.ts";
+import { handleUiRequest, setPublicDir } from "../../ui/serve.ts";
 import { startServer } from "../server.ts";
 
 /**
@@ -90,6 +93,102 @@ describe("server routing", () => {
 			expect(res.headers.get("Content-Type")).toContain("application/json");
 			const body = (await res.json()) as { agent: string };
 			expect(body.agent).toBe("phantom");
+		});
+	});
+
+	// /public/* is the agent publishing surface: files under public/public/*
+	// on disk are served without auth so Googlebot and unauthenticated
+	// visitors can fetch them. These tests redirect publicDir at a tmp dir
+	// so they never mutate the repo's own public/ tree.
+	describe("GET /public/*", () => {
+		const realPublic = resolve(import.meta.dir, "../../../public");
+		let tmpDir: string;
+
+		beforeEach(() => {
+			tmpDir = mkdtempSync(join(tmpdir(), "phantom-public-"));
+			setPublicDir(tmpDir);
+		});
+
+		afterEach(() => {
+			rmSync(tmpDir, { recursive: true, force: true });
+			setPublicDir(realPublic);
+		});
+
+		function write(rel: string, content: string): void {
+			const full = join(tmpDir, rel);
+			mkdirSync(full.substring(0, full.lastIndexOf("/")), { recursive: true });
+			writeFileSync(full, content, "utf-8");
+		}
+
+		test("GET /public/ serves public/public/index.html when present, no redirect to /ui/login", async () => {
+			write("public/index.html", "<!doctype html><title>Blog</title>");
+			const res = await fetch(`${baseUrl}/public/`, { redirect: "manual" });
+			expect(res.status).toBe(200);
+			expect(res.headers.get("Location")).toBeNull();
+			const body = await res.text();
+			expect(body).toContain("Blog");
+		});
+
+		test("GET /public/ returns 404 when index.html is missing, never 302", async () => {
+			const res = await fetch(`${baseUrl}/public/`, { redirect: "manual" });
+			expect(res.status).toBe(404);
+			expect(res.headers.get("Location")).toBeNull();
+		});
+
+		test("GET /public/blog/foo.html serves without cookie", async () => {
+			write("public/blog/foo.html", "<!doctype html><title>Post</title>");
+			const res = await fetch(`${baseUrl}/public/blog/foo.html`);
+			expect(res.status).toBe(200);
+			const body = await res.text();
+			expect(body).toContain("Post");
+		});
+
+		test("GET /public/blog/ falls back to index.html inside the directory", async () => {
+			write("public/blog/index.html", "<!doctype html><title>Blog Index</title>");
+			const res = await fetch(`${baseUrl}/public/blog/`);
+			expect(res.status).toBe(200);
+			const body = await res.text();
+			expect(body).toContain("Blog Index");
+		});
+
+		test("traversal attempt /public/..%2Fsecret.html returns 403", async () => {
+			write("secret.html", "<!doctype html><title>secret</title>");
+			const res = await fetch(`${baseUrl}/public/..%2Fsecret.html`);
+			expect(res.status).toBe(403);
+			const body = await res.text();
+			expect(body).not.toContain("secret");
+		});
+
+		test("traversal to dashboard.js via /public/../dashboard/dashboard.js returns 403", async () => {
+			write("dashboard/dashboard.js", "console.log('priv');");
+			const res = await fetch(`${baseUrl}/public/..%2Fdashboard%2Fdashboard.js`);
+			expect(res.status).toBe(403);
+			const body = await res.text();
+			expect(body).not.toContain("console.log");
+		});
+
+		test("Cache-Control on /public/* responses is public, max-age=300", async () => {
+			write("public/post.html", "<!doctype html><title>Post</title>");
+			const res = await fetch(`${baseUrl}/public/post.html`);
+			expect(res.status).toBe(200);
+			expect(res.headers.get("Cache-Control")).toBe("public, max-age=300");
+		});
+
+		test("regression: GET /ui/foo.html without cookie still redirects to /ui/login", async () => {
+			write("foo.html", "<!doctype html><title>Private</title>");
+			const res = await handleUiRequest(
+				new Request("http://localhost/ui/foo.html", { headers: { Accept: "text/html" } }),
+			);
+			expect(res.status).toBe(302);
+			expect(res.headers.get("Location")).toBe("/ui/login");
+		});
+
+		test("regression: GET /ui/dashboard/dashboard.js without cookie still returns 401", async () => {
+			write("dashboard/dashboard.js", "console.log('priv');");
+			const res = await handleUiRequest(
+				new Request("http://localhost/ui/dashboard/dashboard.js", { headers: { Accept: "application/javascript" } }),
+			);
+			expect(res.status).toBe(401);
 		});
 	});
 });

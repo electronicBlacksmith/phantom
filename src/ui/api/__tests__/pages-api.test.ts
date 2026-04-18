@@ -113,6 +113,19 @@ describe("GET /ui/api/pages", () => {
 		expect(body.pages[0].path).toBe("/ui/keep.html");
 	});
 
+	test("excludes public/ directory so agent-published pages never surface in recent-pages", async () => {
+		writePage("public/blog/post-1.html", "<title>Post 1</title>");
+		writePage("public/index.html", "<title>Public Root</title>");
+		writePage("keep.html", "<html><head><title>Keep</title></head></html>");
+		const res = await handleUiRequest(req());
+		const body = (await res.json()) as PagesResponse;
+		const paths = body.pages.map((p) => p.path);
+		expect(paths).not.toContain("/ui/public/blog/post-1.html");
+		expect(paths).not.toContain("/ui/public/index.html");
+		expect(paths).toContain("/ui/keep.html");
+		expect(body.pages.length).toBe(1);
+	});
+
 	test("walks up to depth 3", async () => {
 		writePage("a/b/c/deep.html", "<html><head><title>Deep</title></head></html>");
 		writePage("a/b/c/d/too-deep.html", "<html><head><title>Too Deep</title></head></html>");
