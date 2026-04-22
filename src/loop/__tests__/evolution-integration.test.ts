@@ -140,9 +140,12 @@ describe("LoopRunner evolution integration", () => {
 	});
 
 	test("post-loop evolution is called on finalize with correct session data", async () => {
-		const afterSessionMock = mock(async () => ({ version: 1, changes_applied: [], changes_rejected: [] }));
+		const enqueueMock = mock(async () => ({
+			enqueued: true,
+			decision: { fire: true, source: "failsafe" as const, reason: "test", haiku_cost_usd: 0 },
+		}));
 		const mockEvolution = {
-			afterSession: afterSessionMock,
+			enqueueIfWorthy: enqueueMock,
 			getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
 		};
 		const mockMemory = { isReady: () => false };
@@ -167,15 +170,15 @@ describe("LoopRunner evolution integration", () => {
 		// Allow fire-and-forget to complete
 		await Bun.sleep(50);
 
-		expect(afterSessionMock).toHaveBeenCalledTimes(1);
-		const summary = (afterSessionMock.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+		expect(enqueueMock).toHaveBeenCalledTimes(1);
+		const summary = (enqueueMock.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
 		expect(summary.session_id).toBe(loop.id);
 		expect(summary.outcome).toBe("success");
 	});
 
 	test("post-loop evolution failure does not affect loop status", async () => {
 		const mockEvolution = {
-			afterSession: mock(async () => {
+			enqueueIfWorthy: mock(async () => {
 				throw new Error("evolution broke");
 			}),
 			getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
@@ -224,11 +227,12 @@ describe("LoopRunner evolution integration", () => {
 
 	test("critique does NOT fire when usesLLMJudges returns false", async () => {
 		const mockEvolution = {
-			afterSession: mock(async () => ({ version: 1, changes_applied: [], changes_rejected: [] })),
+			enqueueIfWorthy: mock(async () => ({
+				enqueued: true,
+				decision: { fire: true, source: "failsafe" as const, reason: "test", haiku_cost_usd: 0 },
+			})),
 			getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
 			usesLLMJudges: () => false,
-			isWithinCostCap: () => true,
-			trackExternalJudgeCost: mock(() => {}),
 		};
 
 		const runtime = createMockRuntime();
@@ -251,43 +255,19 @@ describe("LoopRunner evolution integration", () => {
 		// Second tick prompt should NOT have critique (judges disabled)
 		const secondPrompt = runtime.handleMessage.mock.calls[1][2] as string;
 		expect(secondPrompt).not.toContain("REVIEWER FEEDBACK");
-		expect(mockEvolution.trackExternalJudgeCost).not.toHaveBeenCalled();
 	});
 
-	test("critique does NOT fire when cost cap is exceeded", async () => {
-		const mockEvolution = {
-			afterSession: mock(async () => ({ version: 1, changes_applied: [], changes_rejected: [] })),
-			getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
-			usesLLMJudges: () => true,
-			isWithinCostCap: () => false,
-			trackExternalJudgeCost: mock(() => {}),
-		};
-
-		const runtime = createMockRuntime();
-		const runner = new LoopRunner({
-			db,
-			runtime,
-			dataDir,
-			autoSchedule: false,
-			postLoopDeps: {
-				evolution: mockEvolution as never,
-				memory: { isReady: () => false } as never,
-				onEvolvedConfigUpdate: () => {},
-			},
-		});
-		const loop = runner.start({ goal: "over budget", checkpointInterval: 1 });
-
-		await runner.tick(loop.id);
-		await runner.tick(loop.id);
-
-		const secondPrompt = runtime.handleMessage.mock.calls[1][2] as string;
-		expect(secondPrompt).not.toContain("REVIEWER FEEDBACK");
-		expect(mockEvolution.trackExternalJudgeCost).not.toHaveBeenCalled();
-	});
+	// Note: the per-engine daily cost cap (`isWithinCostCap`/`trackExternalJudgeCost`)
+	// was removed as part of the v0.20.2 evolution-pipeline rewrite. Re-gating loop
+	// critique against the new reflection_stats cost surface is tracked as a
+	// Phase 2 bullet in docs/plans/2026-04-21-sync-v0.20.2-matrix.md.
 
 	test("tick 1 summary is recorded in transcript", async () => {
 		const runtime = createMockRuntime();
-		const afterSessionMock = mock(async () => ({ version: 1, changes_applied: [], changes_rejected: [] }));
+		const enqueueMock = mock(async () => ({
+			enqueued: true,
+			decision: { fire: true, source: "failsafe" as const, reason: "test", haiku_cost_usd: 0 },
+		}));
 		const runner = new LoopRunner({
 			db,
 			runtime,
@@ -295,11 +275,9 @@ describe("LoopRunner evolution integration", () => {
 			autoSchedule: false,
 			postLoopDeps: {
 				evolution: {
-					afterSession: afterSessionMock,
+					enqueueIfWorthy: enqueueMock,
 					getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
 					usesLLMJudges: () => false,
-					isWithinCostCap: () => true,
-					trackExternalJudgeCost: mock(() => {}),
 				} as never,
 				memory: { isReady: () => false } as never,
 				onEvolvedConfigUpdate: () => {},
@@ -314,7 +292,7 @@ describe("LoopRunner evolution integration", () => {
 		await Bun.sleep(50);
 
 		// The session data should include a Tick 1 summary
-		const summary = (afterSessionMock.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+		const summary = (enqueueMock.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
 		const userMsgs = summary.user_messages as string[];
 		const hasTick1Summary = userMsgs.some((m) => m.includes("Tick 1:"));
 		expect(hasTick1Summary).toBe(true);

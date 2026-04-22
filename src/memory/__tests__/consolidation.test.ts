@@ -1,12 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { AgentRuntime } from "../../agent/runtime.ts";
-import { type SessionData, consolidateSession, consolidateSessionWithLLM } from "../consolidation.ts";
+import { type SessionData, consolidateSession } from "../consolidation.ts";
 import type { MemorySystem } from "../system.ts";
 
-// Minimal mock runtime for tests - runConsolidationJudge is mocked so this is never called
-function createMockRuntime(): AgentRuntime {
-	return {} as AgentRuntime;
-}
+// Heuristic consolidation path tests. The LLM consolidation path
+// (consolidateSessionWithLLM) was removed upstream in v0.20.2 along with
+// src/evolution/judges/consolidation-judge.ts; the reflection subprocess
+// absorbs that role now. consolidateSession (heuristic) is still the live
+// memory-consolidation path called from src/index.ts (channel sessions) and
+// src/loop/post-loop.ts (loop sessions), so it keeps dedicated coverage.
 
 function makeTestSessionData(overrides?: Partial<SessionData>): SessionData {
 	return {
@@ -29,11 +30,9 @@ function createMockMemory(): {
 	memory: MemorySystem;
 	storedEpisodes: Array<Record<string, unknown>>;
 	storedFacts: Array<Record<string, unknown>>;
-	storedProcedures: Array<Record<string, unknown>>;
 } {
 	const storedEpisodes: Array<Record<string, unknown>> = [];
 	const storedFacts: Array<Record<string, unknown>> = [];
-	const storedProcedures: Array<Record<string, unknown>> = [];
 
 	const memory = {
 		storeEpisode: mock((episode: Record<string, unknown>) => {
@@ -44,13 +43,9 @@ function createMockMemory(): {
 			storedFacts.push(fact);
 			return Promise.resolve(fact.id as string);
 		}),
-		storeProcedure: mock((procedure: Record<string, unknown>) => {
-			storedProcedures.push(procedure);
-			return Promise.resolve(procedure.id as string);
-		}),
 	} as unknown as MemorySystem;
 
-	return { memory, storedEpisodes, storedFacts, storedProcedures };
+	return { memory, storedEpisodes, storedFacts };
 }
 
 describe("consolidateSession", () => {
@@ -167,111 +162,5 @@ describe("consolidateSession", () => {
 
 		expect(result.durationMs).toBeGreaterThanOrEqual(0);
 		expect(typeof result.durationMs).toBe("number");
-	});
-});
-
-// Mock the consolidation judge for LLM path tests
-mock.module("../../evolution/judges/consolidation-judge.ts", () => ({
-	runConsolidationJudge: mock(),
-}));
-
-import { runConsolidationJudge } from "../../evolution/judges/consolidation-judge.ts";
-const mockedRunConsolidationJudge = runConsolidationJudge as ReturnType<typeof mock>;
-
-function makeJudgeResult(overrides?: {
-	detected_procedures?: Array<{
-		name: string;
-		description: string;
-		trigger: string;
-		steps: string[];
-		confidence: number;
-		evidence: string;
-	}>;
-	extracted_facts?: Array<Record<string, unknown>>;
-}) {
-	return {
-		data: {
-			reasoning: "test reasoning",
-			extracted_facts: overrides?.extracted_facts ?? [],
-			detected_procedures: overrides?.detected_procedures ?? [],
-			episode_importance: 0.5,
-			episode_importance_reasoning: "test",
-			contradiction_alerts: [],
-			key_takeaways: ["test"],
-		},
-		costUsd: 0.01,
-		inputTokens: 100,
-		outputTokens: 50,
-	};
-}
-
-describe("consolidateSessionWithLLM - procedure storage", () => {
-	test("stores detected procedures from judge output", async () => {
-		const { memory, storedProcedures } = createMockMemory();
-		mockedRunConsolidationJudge.mockResolvedValueOnce(
-			makeJudgeResult({
-				detected_procedures: [
-					{
-						name: "deploy-staging",
-						description: "Deploy to staging environment",
-						trigger: "User asks to deploy staging",
-						steps: ["Run tests", "Build artifacts", "Deploy"],
-						confidence: 0.8,
-						evidence: "User deployed staging",
-					},
-				],
-			}),
-		);
-
-		const { result } = await consolidateSessionWithLLM(createMockRuntime(), memory, makeTestSessionData(), "");
-
-		expect(result.proceduresDetected).toBe(1);
-		expect(storedProcedures.length).toBe(1);
-		expect(storedProcedures[0].name).toBe("deploy-staging");
-		expect(storedProcedures[0].description).toBe("Deploy to staging environment");
-		expect(storedProcedures[0].trigger).toBe("User asks to deploy staging");
-		expect(storedProcedures[0].confidence).toBe(0.8);
-
-		const steps = storedProcedures[0].steps as Array<{ order: number; action: string }>;
-		expect(steps.length).toBe(3);
-		expect(steps[0].order).toBe(1);
-		expect(steps[0].action).toBe("Run tests");
-		expect(steps[2].order).toBe(3);
-		expect(steps[2].action).toBe("Deploy");
-	});
-
-	test("seeds success_count from session outcome", async () => {
-		const { memory: memSuccess, storedProcedures: procsSuccess } = createMockMemory();
-		const { memory: memFailure, storedProcedures: procsFailure } = createMockMemory();
-
-		const proc = {
-			name: "test-proc",
-			description: "test",
-			trigger: "test",
-			steps: ["step1"],
-			confidence: 0.7,
-			evidence: "test",
-		};
-
-		mockedRunConsolidationJudge.mockResolvedValueOnce(makeJudgeResult({ detected_procedures: [proc] }));
-		await consolidateSessionWithLLM(createMockRuntime(), memSuccess, makeTestSessionData({ outcome: "success" }), "");
-
-		mockedRunConsolidationJudge.mockResolvedValueOnce(makeJudgeResult({ detected_procedures: [proc] }));
-		await consolidateSessionWithLLM(createMockRuntime(), memFailure, makeTestSessionData({ outcome: "failure" }), "");
-
-		expect(procsSuccess[0].success_count).toBe(1);
-		expect(procsSuccess[0].failure_count).toBe(0);
-		expect(procsFailure[0].success_count).toBe(0);
-		expect(procsFailure[0].failure_count).toBe(1);
-	});
-
-	test("handles empty procedures array gracefully", async () => {
-		const { memory, storedProcedures } = createMockMemory();
-		mockedRunConsolidationJudge.mockResolvedValueOnce(makeJudgeResult());
-
-		const { result } = await consolidateSessionWithLLM(createMockRuntime(), memory, makeTestSessionData(), "");
-
-		expect(result.proceduresDetected).toBe(0);
-		expect(storedProcedures.length).toBe(0);
 	});
 });
