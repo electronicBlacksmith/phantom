@@ -140,9 +140,12 @@ describe("LoopRunner evolution integration", () => {
 	});
 
 	test("post-loop evolution is called on finalize with correct session data", async () => {
-		const afterSessionMock = mock(async () => ({ version: 1, changes_applied: [], changes_rejected: [] }));
+		const enqueueMock = mock(async () => ({
+			enqueued: true,
+			decision: { fire: true, source: "failsafe" as const, reason: "test", haiku_cost_usd: 0 },
+		}));
 		const mockEvolution = {
-			afterSession: afterSessionMock,
+			enqueueIfWorthy: enqueueMock,
 			getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
 		};
 		const mockMemory = { isReady: () => false };
@@ -167,15 +170,15 @@ describe("LoopRunner evolution integration", () => {
 		// Allow fire-and-forget to complete
 		await Bun.sleep(50);
 
-		expect(afterSessionMock).toHaveBeenCalledTimes(1);
-		const summary = (afterSessionMock.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+		expect(enqueueMock).toHaveBeenCalledTimes(1);
+		const summary = (enqueueMock.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
 		expect(summary.session_id).toBe(loop.id);
 		expect(summary.outcome).toBe("success");
 	});
 
 	test("post-loop evolution failure does not affect loop status", async () => {
 		const mockEvolution = {
-			afterSession: mock(async () => {
+			enqueueIfWorthy: mock(async () => {
 				throw new Error("evolution broke");
 			}),
 			getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
@@ -224,7 +227,10 @@ describe("LoopRunner evolution integration", () => {
 
 	test("critique does NOT fire when usesLLMJudges returns false", async () => {
 		const mockEvolution = {
-			afterSession: mock(async () => ({ version: 1, changes_applied: [], changes_rejected: [] })),
+			enqueueIfWorthy: mock(async () => ({
+				enqueued: true,
+				decision: { fire: true, source: "failsafe" as const, reason: "test", haiku_cost_usd: 0 },
+			})),
 			getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
 			usesLLMJudges: () => false,
 		};
@@ -258,7 +264,10 @@ describe("LoopRunner evolution integration", () => {
 
 	test("tick 1 summary is recorded in transcript", async () => {
 		const runtime = createMockRuntime();
-		const afterSessionMock = mock(async () => ({ version: 1, changes_applied: [], changes_rejected: [] }));
+		const enqueueMock = mock(async () => ({
+			enqueued: true,
+			decision: { fire: true, source: "failsafe" as const, reason: "test", haiku_cost_usd: 0 },
+		}));
 		const runner = new LoopRunner({
 			db,
 			runtime,
@@ -266,7 +275,7 @@ describe("LoopRunner evolution integration", () => {
 			autoSchedule: false,
 			postLoopDeps: {
 				evolution: {
-					afterSession: afterSessionMock,
+					enqueueIfWorthy: enqueueMock,
 					getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
 					usesLLMJudges: () => false,
 				} as never,
@@ -283,7 +292,7 @@ describe("LoopRunner evolution integration", () => {
 		await Bun.sleep(50);
 
 		// The session data should include a Tick 1 summary
-		const summary = (afterSessionMock.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+		const summary = (enqueueMock.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
 		const userMsgs = summary.user_messages as string[];
 		const hasTick1Summary = userMsgs.some((m) => m.includes("Tick 1:"));
 		expect(hasTick1Summary).toBe(true);

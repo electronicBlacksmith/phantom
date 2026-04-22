@@ -123,15 +123,18 @@ export async function runPostLoopPipeline(deps: PostLoopDeps, sessionData: Sessi
 	const { consolidateSession } = await import("../memory/consolidation.ts");
 
 	// Evolution pipeline - runs independently of memory state.
-	// v0.20.2 moved session summarization into the reflection subprocess,
-	// so we pass the raw SessionData-derived summary directly. The LLM-driven
-	// consolidation path (consolidateSessionWithLLM) was removed upstream and
-	// its work is now absorbed by the reflection subprocess.
+	// v0.20.2 moved session summarization into the reflection subprocess, so
+	// we pass the raw SessionData-derived summary directly. Route through
+	// enqueueIfWorthy so loop-originated sessions go through the Haiku gate,
+	// land in the persistent queue, and are drained by the cadence batch
+	// processor. afterSession is the direct/unit-test path and would skip
+	// decideGate + queue persistence + cadence batching.
 	if (evolution) {
 		const summary = summarizeSessionForEvolution(sessionData);
 		try {
-			const result = await evolution.afterSession(summary);
-			if (result.changes_applied.length > 0 && onEvolvedConfigUpdate) {
+			const enqResult = await evolution.enqueueIfWorthy(summary);
+			const applied = enqResult.inlineResult?.changes_applied.length ?? 0;
+			if (applied > 0 && onEvolvedConfigUpdate) {
 				onEvolvedConfigUpdate(evolution.getConfig());
 			}
 		} catch (err: unknown) {
