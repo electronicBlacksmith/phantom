@@ -1,0 +1,45 @@
+name: "Chore: dead code"
+description: Unreachable or unused code encountered while working. Ripe for deletion.
+title: "[chore/dead-code] "
+labels:
+  - "chore/dead-code"
+body:
+  - type: textarea
+    id: paths
+    attributes:
+      label: File paths (one per line)
+      description: Paths relative to repo root. Include line ranges where applicable.
+      placeholder: |
+        src/legacy/old-parser.ts
+        src/agent/runtime.ts:412-438
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Kind of dead code
+      options:
+        - "exported symbol, zero importers"
+        - "private function, zero callers"
+        - "conditional branch unreachable (flag/constant)"
+        - "entire file unreferenced"
+        - "commented-out block"
+    validations:
+      required: true
+  - type: textarea
+    id: proof
+    attributes:
+      label: Proof of unreachability
+      description: Command output showing zero references. Grep output, compiler/linter warning, or coverage report. "I looked and nothing uses it" is not proof.
+      render: text
+      placeholder: "$ rg 'oldParser' --type ts\n(no output)"
+    validations:
+      required: true
+  - type: textarea
+    id: history
+    attributes:
+      label: Why it was there (if discoverable)
+      description: Last commit to touch these lines. Helps judge whether deletion is safe or is removing someone's in-progress work.
+      placeholder: "Last touched in commit a4a8679 (2026-03-15) — feature flag rollout, flag has since been removed."
+    validations:
+      required: false

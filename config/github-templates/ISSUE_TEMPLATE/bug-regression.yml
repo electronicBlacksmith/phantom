@@ -1,0 +1,51 @@
+name: "Bug: regression"
+description: Behavior changed unintentionally. Tied to a specific commit.
+title: "[bug/regression] "
+labels:
+  - "bug/regression"
+body:
+  - type: textarea
+    id: prior-behavior
+    attributes:
+      label: Prior behavior (what used to happen)
+      description: One paragraph. State it in terms a stranger could verify.
+    validations:
+      required: true
+  - type: textarea
+    id: new-behavior
+    attributes:
+      label: New behavior (what happens now)
+      description: One paragraph. Same bar as above.
+    validations:
+      required: true
+  - type: input
+    id: first-broken-sha
+    attributes:
+      label: First broken commit SHA
+      description: Full 40-character SHA identified via bisect or diff inspection. Required. No "somewhere after X" allowed.
+      placeholder: "a4a86795b2c3..."
+    validations:
+      required: true
+  - type: input
+    id: last-good-sha
+    attributes:
+      label: Last known-good commit SHA
+      description: Full 40-character SHA where prior behavior was confirmed.
+      placeholder: "e44301e9..."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Exact steps, starting from `git checkout <first-broken-sha>`. Include any commands, inputs, and expected vs actual output.
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence this is a regression (not a new bug)
+      description: Pointer to the prior test, log, spec, or commit message that documented the old behavior. "I remember it worked" is not evidence.
+    validations:
+      required: true
