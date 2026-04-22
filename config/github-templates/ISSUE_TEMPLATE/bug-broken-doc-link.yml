@@ -1,0 +1,49 @@
+name: "Bug: broken doc link"
+description: A link inside the repo's documentation returns 404 or points to the wrong target.
+title: "[bug/broken-doc-link] "
+labels:
+  - "bug/broken-doc-link"
+body:
+  - type: input
+    id: source-file
+    attributes:
+      label: Source file containing the broken link
+      description: Path relative to repo root, with the line number.
+      placeholder: "docs/architecture.md:142"
+    validations:
+      required: true
+  - type: input
+    id: broken-url
+    attributes:
+      label: The broken link, verbatim
+      description: Exactly as it appears in the source file (markdown or raw URL).
+      placeholder: "[Memory](./memory-old.md)"
+    validations:
+      required: true
+  - type: dropdown
+    id: failure-mode
+    attributes:
+      label: How is it broken?
+      options:
+        - "404 (target does not exist)"
+        - "wrong target (resolves, but to the wrong page)"
+        - "anchor missing (page exists, #fragment does not)"
+        - "external URL dead"
+    validations:
+      required: true
+  - type: input
+    id: expected-target
+    attributes:
+      label: Expected target (if known)
+      description: Path or URL the link should point to. Leave blank if unclear.
+      placeholder: "docs/memory.md"
+    validations:
+      required: false
+  - type: textarea
+    id: verification
+    attributes:
+      label: How the break was verified
+      description: Command output, curl response, or manual navigation steps. One-liner is fine.
+      render: text
+    validations:
+      required: true

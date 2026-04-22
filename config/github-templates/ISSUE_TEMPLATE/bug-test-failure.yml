@@ -1,0 +1,56 @@
+name: "Bug: test failure"
+description: A test is failing on dev or main that was not failing before.
+title: "[bug/test-failure] "
+labels:
+  - "bug/test-failure"
+body:
+  - type: input
+    id: test-name
+    attributes:
+      label: Fully qualified test name
+      description: The exact identifier the test runner prints. Path plus test name.
+      placeholder: "src/memory/episodic.test.ts > hybrid search > returns BM25 + dense results"
+    validations:
+      required: true
+  - type: input
+    id: branch
+    attributes:
+      label: Branch where the failure was observed
+      placeholder: "dev"
+    validations:
+      required: true
+  - type: input
+    id: first-failing-commit
+    attributes:
+      label: First commit SHA observed failing
+      description: Full 40-character SHA. Leave blank only if the failure predates the branch.
+      placeholder: "a4a86795b2c3..."
+    validations:
+      required: false
+  - type: textarea
+    id: failure-output
+    attributes:
+      label: Raw failure output
+      description: Paste the runner output verbatim. Do not summarize. Include stack trace if any.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction command
+      description: Exact shell command that reproduces the failure from a clean checkout.
+      render: bash
+      placeholder: "bun test src/memory/episodic.test.ts"
+    validations:
+      required: true
+  - type: dropdown
+    id: deterministic
+    attributes:
+      label: Deterministic?
+      options:
+        - "yes, fails every run"
+        - "flaky, fails intermittently"
+        - "unknown"
+    validations:
+      required: true

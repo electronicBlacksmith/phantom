@@ -1,0 +1,52 @@
+name: "Chore: TODO or FIXME"
+description: A TODO or FIXME comment encountered in the source.
+title: "[chore/todo] "
+labels:
+  - "chore/todo"
+body:
+  - type: input
+    id: location
+    attributes:
+      label: File and line
+      description: Path and line number where the comment lives.
+      placeholder: "src/evolution/engine.ts:284"
+    validations:
+      required: true
+  - type: dropdown
+    id: marker
+    attributes:
+      label: Marker kind
+      options:
+        - "TODO"
+        - "FIXME"
+        - "XXX"
+        - "HACK"
+        - "NOTE (action-bearing)"
+    validations:
+      required: true
+  - type: textarea
+    id: comment-text
+    attributes:
+      label: The comment, verbatim
+      description: Paste the full comment including surrounding lines for context.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-action
+    attributes:
+      label: Proposed action
+      description: What resolving this looks like. Delete the comment? Implement the missing piece? Link to a design doc? Must be concrete.
+    validations:
+      required: true
+  - type: dropdown
+    id: blast-radius
+    attributes:
+      label: Blast radius if acted on
+      options:
+        - "local (touches one function)"
+        - "module (touches one file or tight cluster)"
+        - "cross-module (touches multiple subsystems)"
+        - "unknown"
+    validations:
+      required: true
