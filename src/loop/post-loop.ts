@@ -1,7 +1,28 @@
 import type { EvolutionEngine } from "../evolution/engine.ts";
+import type { SessionSummary } from "../evolution/types.ts";
 import type { SessionData } from "../memory/consolidation.ts";
 import type { MemorySystem } from "../memory/system.ts";
 import type { Loop, LoopStatus } from "./types.ts";
+
+// Local SessionData -> SessionSummary adapter. v0.20.2 removed the shared
+// sessionDataToSummary helper from memory/consolidation.ts; the reflection
+// subprocess now owns summarization. This thin mapper keeps the loop's
+// evolution hook working.
+function summarizeSessionForEvolution(data: SessionData): SessionSummary {
+	return {
+		session_id: data.sessionId,
+		session_key: data.sessionKey,
+		user_id: data.userId,
+		user_messages: data.userMessages,
+		assistant_messages: data.assistantMessages,
+		tools_used: data.toolsUsed,
+		files_tracked: data.filesTracked,
+		outcome: data.outcome,
+		cost_usd: data.costUsd,
+		started_at: data.startedAt,
+		ended_at: data.endedAt,
+	};
+}
 
 export type LoopTranscript = {
 	firstPrompt: string;
@@ -99,13 +120,15 @@ export function synthesizeSessionData(loop: Loop, status: LoopStatus, transcript
  */
 export async function runPostLoopPipeline(deps: PostLoopDeps, sessionData: SessionData): Promise<void> {
 	const { evolution, memory, onEvolvedConfigUpdate } = deps;
-	const { consolidateSessionWithLLM, consolidateSession, sessionDataToSummary } = await import(
-		"../memory/consolidation.ts"
-	);
+	const { consolidateSession } = await import("../memory/consolidation.ts");
 
-	// Evolution pipeline - runs independently of memory state
+	// Evolution pipeline - runs independently of memory state.
+	// v0.20.2 moved session summarization into the reflection subprocess,
+	// so we pass the raw SessionData-derived summary directly. The LLM-driven
+	// consolidation path (consolidateSessionWithLLM) was removed upstream and
+	// its work is now absorbed by the reflection subprocess.
 	if (evolution) {
-		const summary = sessionDataToSummary(sessionData);
+		const summary = summarizeSessionForEvolution(sessionData);
 		try {
 			const result = await evolution.afterSession(summary);
 			if (result.changes_applied.length > 0 && onEvolvedConfigUpdate) {
@@ -117,28 +140,15 @@ export async function runPostLoopPipeline(deps: PostLoopDeps, sessionData: Sessi
 		}
 	}
 
-	// Memory consolidation - runs independently of evolution state
+	// Memory consolidation - runs independently of evolution state.
+	// Heuristic path only; upstream removed the LLM consolidation path.
 	if (!memory?.isReady()) return;
 	try {
-		const runtime = evolution?.getRuntime();
-		const useLLM = evolution?.usesLLMJudges() && evolution?.isWithinCostCap() && runtime;
-		if (useLLM && evolution && runtime) {
-			const evolvedConfig = evolution.getConfig();
-			const existingFacts = `${evolvedConfig.userProfile}\n${evolvedConfig.domainKnowledge}`;
-			const { result, judgeCost } = await consolidateSessionWithLLM(runtime, memory, sessionData, existingFacts);
-			if (judgeCost) evolution.trackExternalJudgeCost(judgeCost);
-			if (result.episodesCreated > 0 || result.factsExtracted > 0) {
-				console.log(
-					`[loop] Consolidated (LLM): ${result.episodesCreated} episodes, ${result.factsExtracted} facts (${result.durationMs}ms)`,
-				);
-			}
-		} else {
-			const result = await consolidateSession(memory, sessionData);
-			if (result.episodesCreated > 0 || result.factsExtracted > 0) {
-				console.log(
-					`[loop] Consolidated: ${result.episodesCreated} episodes, ${result.factsExtracted} facts (${result.durationMs}ms)`,
-				);
-			}
+		const result = await consolidateSession(memory, sessionData);
+		if (result.episodesCreated > 0 || result.factsExtracted > 0) {
+			console.log(
+				`[loop] Consolidated: ${result.episodesCreated} episodes, ${result.factsExtracted} facts (${result.durationMs}ms)`,
+			);
 		}
 	} catch (err: unknown) {
 		const msg = err instanceof Error ? err.message : String(err);

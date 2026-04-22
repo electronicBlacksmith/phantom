@@ -17,7 +17,17 @@ export function runMigrations(db: Database): void {
 
 	for (let i = 0; i < MIGRATIONS.length; i++) {
 		if (applied.has(i)) continue;
-		db.run(MIGRATIONS[i]);
+		try {
+			db.run(MIGRATIONS[i]);
+		} catch (error) {
+			// SQLite raises "duplicate column name" when ALTER TABLE ADD COLUMN
+			// re-runs on a DB that already has the column. Earlier fork deploys
+			// may have applied ALTERs at indices the runner now considers new
+			// (e.g. after a migration renumbering). Treat that single failure
+			// mode as idempotent and record the row; any other error propagates.
+			const msg = error instanceof Error ? error.message : String(error);
+			if (!msg.includes("duplicate column name")) throw error;
+		}
 		db.run("INSERT INTO _migrations (index_num) VALUES (?)", [i]);
 	}
 }

@@ -356,13 +356,15 @@ export class LoopRunner {
 		const transcript = this.transcripts.get(loopId);
 		if (!transcript) return;
 		const evo = this.postLoopDeps?.evolution;
-		if (!evo || !evo.usesLLMJudges() || !evo.isWithinCostCap()) return;
+		// v0.20.2 removed engine-level daily cost accounting; loop critique runs
+		// whenever LLM judges are available. Re-gating on a cost cap against the
+		// new reflection_stats cost surface is tracked as a Phase 2 bullet.
+		if (!evo || !evo.usesLLMJudges()) return;
 		const runtime = evo.getRuntime();
 		if (!runtime) return;
 		try {
 			const r = await runCritiqueJudge(runtime, loop.goal, stateContents, transcript, iteration, loop.maxIterations);
 			this.pendingCritique.set(loopId, r.assessment);
-			evo.trackExternalJudgeCost(r.cost);
 		} catch (e: unknown) {
 			console.warn(`[loop] Critique failed for ${loopId}: ${e instanceof Error ? e.message : e}`);
 		}

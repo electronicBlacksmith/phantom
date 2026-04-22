@@ -24,7 +24,7 @@ No configuration needed. Existing deployments continue to work unchanged.
 
 ```yaml
 # phantom.yaml
-model: claude-sonnet-4-6
+model: claude-opus-4-7
 # No provider block = defaults to anthropic
 ```
 

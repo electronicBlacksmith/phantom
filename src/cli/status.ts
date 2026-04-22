@@ -13,7 +13,6 @@ type HealthResponse = {
 	evolution: {
 		generation: number;
 		session_count?: number;
-		sessions_since_consolidation?: number;
 		session_log_depth?: number;
 	};
 	onboarding?: string;
@@ -86,7 +85,7 @@ export async function runStatus(args: string[]): Promise<void> {
 	const evo = data.evolution;
 	const evoDetail =
 		evo.session_count != null
-			? `gen ${evo.generation} (${evo.session_count} sessions, ${evo.sessions_since_consolidation ?? 0} since consolidation, ${evo.session_log_depth ?? 0} queued)`
+			? `gen ${evo.generation} (${evo.session_count} sessions, ${evo.session_log_depth ?? 0} queued)`
 			: `gen ${evo.generation}`;
 
 	console.log(

@@ -227,8 +227,6 @@ describe("LoopRunner evolution integration", () => {
 			afterSession: mock(async () => ({ version: 1, changes_applied: [], changes_rejected: [] })),
 			getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
 			usesLLMJudges: () => false,
-			isWithinCostCap: () => true,
-			trackExternalJudgeCost: mock(() => {}),
 		};
 
 		const runtime = createMockRuntime();
@@ -251,39 +249,12 @@ describe("LoopRunner evolution integration", () => {
 		// Second tick prompt should NOT have critique (judges disabled)
 		const secondPrompt = runtime.handleMessage.mock.calls[1][2] as string;
 		expect(secondPrompt).not.toContain("REVIEWER FEEDBACK");
-		expect(mockEvolution.trackExternalJudgeCost).not.toHaveBeenCalled();
 	});
 
-	test("critique does NOT fire when cost cap is exceeded", async () => {
-		const mockEvolution = {
-			afterSession: mock(async () => ({ version: 1, changes_applied: [], changes_rejected: [] })),
-			getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
-			usesLLMJudges: () => true,
-			isWithinCostCap: () => false,
-			trackExternalJudgeCost: mock(() => {}),
-		};
-
-		const runtime = createMockRuntime();
-		const runner = new LoopRunner({
-			db,
-			runtime,
-			dataDir,
-			autoSchedule: false,
-			postLoopDeps: {
-				evolution: mockEvolution as never,
-				memory: { isReady: () => false } as never,
-				onEvolvedConfigUpdate: () => {},
-			},
-		});
-		const loop = runner.start({ goal: "over budget", checkpointInterval: 1 });
-
-		await runner.tick(loop.id);
-		await runner.tick(loop.id);
-
-		const secondPrompt = runtime.handleMessage.mock.calls[1][2] as string;
-		expect(secondPrompt).not.toContain("REVIEWER FEEDBACK");
-		expect(mockEvolution.trackExternalJudgeCost).not.toHaveBeenCalled();
-	});
+	// Note: the per-engine daily cost cap (`isWithinCostCap`/`trackExternalJudgeCost`)
+	// was removed as part of the v0.20.2 evolution-pipeline rewrite. Re-gating loop
+	// critique against the new reflection_stats cost surface is tracked as a
+	// Phase 2 bullet in docs/plans/2026-04-21-sync-v0.20.2-matrix.md.
 
 	test("tick 1 summary is recorded in transcript", async () => {
 		const runtime = createMockRuntime();
@@ -298,8 +269,6 @@ describe("LoopRunner evolution integration", () => {
 					afterSession: afterSessionMock,
 					getConfig: () => ({ userProfile: "", domainKnowledge: "" }),
 					usesLLMJudges: () => false,
-					isWithinCostCap: () => true,
-					trackExternalJudgeCost: mock(() => {}),
 				} as never,
 				memory: { isReady: () => false } as never,
 				onEvolvedConfigUpdate: () => {},

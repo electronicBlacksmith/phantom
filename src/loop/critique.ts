@@ -1,8 +1,14 @@
 import { z } from "zod/v4";
 import type { AgentRuntime } from "../agent/runtime.ts";
-import { callJudge } from "../evolution/judges/client.ts";
-import { JUDGE_MODEL_SONNET, type JudgeCostEntry } from "../evolution/judges/types.ts";
+import { JUDGE_MODEL_SONNET } from "../evolution/judge-models.ts";
 import type { LoopTranscript } from "./post-loop.ts";
+
+export type JudgeCostEntry = {
+	calls: number;
+	totalUsd: number;
+	totalInputTokens: number;
+	totalOutputTokens: number;
+};
 
 export type CritiqueResult = {
 	assessment: string;
@@ -46,12 +52,11 @@ Is this loop making meaningful progress toward the goal? Is the agent stuck
 in a pattern? Should it change approach? Give a brief (2-3 sentence) assessment
 and one concrete suggestion if applicable.`;
 
-	const result = await callJudge(runtime, {
+	const result = await runtime.judgeQuery({
 		model: JUDGE_MODEL_SONNET,
 		systemPrompt: system,
 		userMessage: user,
 		schema: CritiqueSchema,
-		schemaName: "LoopCritique",
 		maxTokens: 500,
 	});
 

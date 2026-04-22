@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { rmSync, writeFileSync } from "node:fs";
 import { buildSafeEnv, executeDynamicHandler } from "../dynamic-handlers.ts";
 import type { DynamicToolDef } from "../dynamic-tools.ts";
 
@@ -148,8 +149,8 @@ describe("executeDynamicHandler", () => {
 	});
 
 	test("script handler does not expose API keys", async () => {
-		const tmpFile = "/tmp/phantom-test-env-leak.ts";
-		await Bun.write(tmpFile, 'console.log(process.env.ANTHROPIC_API_KEY ?? "NOT_SET")');
+		const tmpFile = `/tmp/phantom-test-env-leak-${process.pid}-${Date.now()}.ts`;
+		writeFileSync(tmpFile, 'console.log(process.env.ANTHROPIC_API_KEY ?? "NOT_SET")');
 
 		const tool: DynamicToolDef = {
 			name: "test_script_env_leak",
@@ -172,6 +173,7 @@ describe("executeDynamicHandler", () => {
 			} else {
 				process.env.ANTHROPIC_API_KEY = undefined;
 			}
+			rmSync(tmpFile, { force: true });
 		}
 	});
 
@@ -285,8 +287,8 @@ describe("executeDynamicHandler", () => {
 	});
 
 	test("script handler receives TOOL_INPUT via env", async () => {
-		const tmpFile = "/tmp/phantom-test-tool-input.ts";
-		await Bun.write(tmpFile, "console.log(process.env.TOOL_INPUT)");
+		const tmpFile = `/tmp/phantom-test-tool-input-${process.pid}-${Date.now()}.ts`;
+		writeFileSync(tmpFile, "console.log(process.env.TOOL_INPUT)");
 
 		const tool: DynamicToolDef = {
 			name: "test_script_input",
@@ -296,8 +298,12 @@ describe("executeDynamicHandler", () => {
 			handlerPath: tmpFile,
 		};
 
-		const result = await executeDynamicHandler(tool, { key: "value" });
-		const text = (result.content[0] as { type: string; text: string }).text;
-		expect(text).toContain('"key":"value"');
+		try {
+			const result = await executeDynamicHandler(tool, { key: "value" });
+			const text = (result.content[0] as { type: string; text: string }).text;
+			expect(text).toContain('"key":"value"');
+		} finally {
+			rmSync(tmpFile, { force: true });
+		}
 	});
 });

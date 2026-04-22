@@ -36,7 +36,10 @@ describe("runMigrations", () => {
 		runMigrations(db);
 
 		const migrationCount = db.query("SELECT COUNT(*) as count FROM _migrations").get() as { count: number };
-		expect(migrationCount.count).toBe(19);
+		// Migration history is the union of upstream's 47 and fork's 9
+		// fork-unique additions (indices 10-18), with upstream's entries
+		// appended after: total 56 (indices 0..55).
+		expect(migrationCount.count).toBe(56);
 	});
 
 	test("tracks applied migration indices", () => {
@@ -48,6 +51,30 @@ describe("runMigrations", () => {
 			.all()
 			.map((r) => (r as { index_num: number }).index_num);
 
-		expect(indices).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+		expect(indices).toEqual([
+			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+			31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55,
+		]);
+	});
+
+	test("subagent_audit_log has frontmatter JSON columns after migration", () => {
+		const db = freshDb();
+		runMigrations(db);
+		const cols = db
+			.query("PRAGMA table_info(subagent_audit_log)")
+			.all()
+			.map((r) => (r as { name: string }).name);
+		expect(cols).toContain("previous_frontmatter_json");
+		expect(cols).toContain("new_frontmatter_json");
+	});
+
+	test("evolution_queue table exists after migration", () => {
+		const db = freshDb();
+		runMigrations(db);
+		const row = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='evolution_queue'").get() as {
+			name: string;
+		} | null;
+		expect(row).not.toBeNull();
+		expect(row?.name).toBe("evolution_queue");
 	});
 });
